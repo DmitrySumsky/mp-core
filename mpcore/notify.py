@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.parse
 import urllib.request
 
@@ -63,12 +64,14 @@ def parse_target(target: str):
 
     Единица в теме — не тема: см. `GENERAL_THREAD`.
     """
-    target = str(target).strip()
-    if ":" in target:
-        chat, thread = target.rsplit(":", 1)
-        if thread.isdigit():
-            return chat, (None if thread == GENERAL_THREAD else thread)
-    return target, None
+    text = str(target).strip()
+    # Разделителем встречается и двоеточие, и косая черта — люди пишут
+    # адрес руками, и обе записи уже живут в настройках боевых книг.
+    match = re.match(r"^(.+?)\s*[:/]\s*(\d+)$", text)
+    if match:
+        chat, thread = match.group(1).strip(), match.group(2)
+        return chat, (None if thread == GENERAL_THREAD else thread)
+    return text, None
 
 
 def parse_targets(raw: str):

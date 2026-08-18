@@ -22,7 +22,7 @@
  *  5. Суточная квота аналитики считается по контурам РАЗДЕЛЬНО: когда
  *     один контур наполняется, а второй стоит — дело не в токене.
  *
- * @version 0.7.0
+ * @version 0.7.1
  */
 
 var MpCore = (function () {
@@ -199,15 +199,11 @@ var MpCore = (function () {
    */
   function parseTarget(raw) {
     var text = String(raw || '').trim();
-    var at = text.lastIndexOf(':');
-    if (at > 0) {
-      var thread = text.slice(at + 1);
-      if (/^\d+$/.test(thread)) {
-        return {
-          chat: text.slice(0, at),
-          thread: thread === GENERAL_THREAD ? null : thread
-        };
-      }
+    // Разделителем встречается и двоеточие, и косая черта — люди пишут
+    // адрес руками, и обе записи уже живут в настройках боевых книг.
+    var m = text.match(/^(.+?)\s*[:\/]\s*(\d+)$/);
+    if (m) {
+      return { chat: m[1].trim(), thread: m[2] === GENERAL_THREAD ? null : m[2] };
     }
     return { chat: text, thread: null };
   }
@@ -289,7 +285,7 @@ var MpCore = (function () {
   }
 
   return {
-    VERSION: '0.7.0',
+    VERSION: '0.7.1',
     STATE_NONE: STATE_NONE,
     STATE_GONE: STATE_GONE,
     STATE_FAIL: STATE_FAIL,

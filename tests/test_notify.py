@@ -33,6 +33,12 @@ def test_parse_target_reads_optional_thread():
     assert notify.parse_target("@channel") == ("@channel", None)
 
 
+def test_slash_separator_works_too():
+    """Адрес пишут руками, и обе записи уже живут в боевых настройках."""
+    assert notify.parse_target("-100123/45") == ("-100123", "45")
+    assert notify.parse_target("-100123/1") == ("-100123", None)
+
+
 def test_general_topic_number_is_not_a_thread():
     """Тема №1 — «General»: номер есть, но API на него отвечает 400."""
     assert notify.parse_target("-100123:1") == ("-100123", None)
