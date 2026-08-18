@@ -27,7 +27,7 @@
 ## Установка
 
 ```bash
-pip install "mp-core @ git+https://github.com/<owner>/mp-core@v0.1.0"
+pip install "mp-core @ git+https://github.com/DmitrySumsky/mp-core@v0.1.0"
 ```
 
 **Ставить только по тегу.** Потребитель закрепляется на конкретной версии и
