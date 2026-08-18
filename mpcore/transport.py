@@ -88,9 +88,14 @@ class Requests:
     name = "requests"
 
     def __init__(self, session=None):
-        import requests
+        # Библиотека нужна только чтобы СОЗДАТЬ сессию. Готовую принимаем
+        # как есть: подсунутый объект не обязан быть настоящим `requests`,
+        # и требовать установленный пакет ради него незачем.
+        if session is None:
+            import requests
 
-        self.session = session or requests.Session()
+            session = requests.Session()
+        self.session = session
 
     def get(self, url, headers=None, params=None, timeout=30) -> Response:
         r = self.session.get(url, headers=headers, params=params, timeout=timeout)
