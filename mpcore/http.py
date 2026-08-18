@@ -56,7 +56,8 @@ def is_quota_message(text: str) -> bool:
 
 
 def get_json(url, headers=None, params=None, tries=4, timeout=30,
-             opener=None, sleep=time.sleep, transport=None):
+             opener=None, sleep=time.sleep, transport=None,
+             method="GET", body=None):
     """GET → разобранный JSON, `EMPTY` или `None`.
 
     `None` — сбой замера (сеть или сервер не отдал за все попытки).
@@ -73,8 +74,12 @@ def get_json(url, headers=None, params=None, tries=4, timeout=30,
     delay = 1.0
     for attempt in range(1, tries + 1):
         try:
-            response = transport.get(url, headers=headers, params=params,
-                                     timeout=timeout)
+            if method == "POST":
+                response = transport.post(url, data=json.dumps(body or {}).encode(),
+                                          headers=headers, timeout=timeout)
+            else:
+                response = transport.get(url, headers=headers, params=params,
+                                         timeout=timeout)
         except Exception:
             if attempt == tries:
                 return None

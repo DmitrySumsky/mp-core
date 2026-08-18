@@ -86,6 +86,22 @@ class Client:
                 return datetime.strptime(newest, "%Y-%m-%d").date(), hist
         return None, {}
 
+    def post(self, path: str, body=None, tries: int = 4, timeout: int = 300):
+        """POST к аналитическому методу источника. `None` — не отдалось.
+
+        Аналитические методы отвечают медленно и той же 429 по квоте, что и
+        карточные, поэтому идут через тот же клиент: один флаг квоты на
+        контур, одни ретраи, одно место, где это знание живёт.
+        """
+        if self.quota_hit:
+            return None
+        try:
+            return self.fetch(f"{BASE}{path}", self.headers, method="POST",
+                              body=body or {}, tries=tries, timeout=timeout)
+        except QuotaExceeded:
+            self.quota_hit = True
+            return None
+
     def available_dates(self, probe_history: dict) -> set:
         """Даты, которые источник вообще отдаёт, как объекты `date`."""
         out = set()

@@ -77,3 +77,33 @@ def test_available_dates_parses_probe_window():
     client = mpstats.Client("t")
     days = client.available_dates({"2026-08-17": 1, "плохая дата": 2})
     assert days == {date(2026, 8, 17)}
+
+
+def test_post_goes_through_the_same_quota_flag():
+    """Аналитический метод и карточный делят один флаг квоты контура."""
+    calls = {"n": 0}
+
+    def fetch(url, headers=None, params=None, **kw):
+        calls["n"] += 1
+        raise QuotaExceeded("превышен лимит")
+
+    client = mpstats.Client("t", fetch=fetch)
+    assert client.post("/wb/get/category") is None
+    assert client.quota_hit is True
+    assert client.post("/wb/get/category") is None
+    assert client.history("1") == {}
+    assert calls["n"] == 1
+
+
+def test_post_passes_method_and_body():
+    seen = {}
+
+    def fetch(url, headers=None, params=None, **kw):
+        seen.update({"url": url, "method": kw.get("method"), "body": kw.get("body")})
+        return {"ok": True}
+
+    client = mpstats.Client("t", fetch=fetch)
+    assert client.post("/wb/get/category", {"a": 1}) == {"ok": True}
+    assert seen["method"] == "POST"
+    assert seen["body"] == {"a": 1}
+    assert seen["url"].endswith("/wb/get/category")
