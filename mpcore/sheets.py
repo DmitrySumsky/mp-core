@@ -35,7 +35,7 @@ WRITE_BATCH = 60          # держим себя внутри лимита за
 
 def access_token(service_account_path: str, ttl: int = 3600) -> str:
     """Токен доступа по ключу сервисного аккаунта."""
-    import jwt                                   # PyJWT — единственная зависимость
+    import jwt  # PyJWT — единственная зависимость
 
     with open(service_account_path, encoding="utf-8") as f:
         account = json.load(f)
