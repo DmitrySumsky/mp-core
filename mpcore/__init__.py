@@ -9,6 +9,7 @@
 Модули:
 
 * `http` — ретраи и различение отказов (транзиентный / квота / пустой);
+* `transport` — чем ходить в сеть: сессия `requests`, если есть, иначе `urllib`;
 * `states` — три состояния замера, которые нельзя смешивать;
 * `wb_card` — живая цена с публичной витрины (без ключа и без квоты);
 * `mpstats` — история цен из платной аналитики (окно 30 дней, квоты по
@@ -22,8 +23,18 @@
 никто не переезжает без правки своего кода.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-from . import datesheet, http, mpstats, notify, sheets, states, wb_card  # noqa: F401
+from . import (  # noqa: F401
+    datesheet,
+    http,
+    mpstats,
+    notify,
+    sheets,
+    states,
+    transport,
+    wb_card,
+)
 
-__all__ = ["datesheet", "http", "mpstats", "notify", "sheets", "states", "wb_card"]
+__all__ = ["datesheet", "http", "mpstats", "notify", "sheets", "states",
+           "transport", "wb_card"]
