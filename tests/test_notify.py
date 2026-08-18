@@ -33,6 +33,17 @@ def test_parse_target_reads_optional_thread():
     assert notify.parse_target("@channel") == ("@channel", None)
 
 
+def test_general_topic_number_is_not_a_thread():
+    """Тема №1 — «General»: номер есть, но API на него отвечает 400."""
+    assert notify.parse_target("-100123:1") == ("-100123", None)
+
+
+def test_parse_targets_reads_a_list_and_tolerates_emptiness():
+    assert notify.parse_targets("-100:5, -200 ,") == [("-100", "5"), ("-200", None)]
+    assert notify.parse_targets("") == []
+    assert notify.parse_targets(None) == []
+
+
 def test_send_reports_failure_of_any_chunk():
     sent = []
 

@@ -52,14 +52,37 @@ def with_headers(text: str, header: str, limit: int = LIMIT):
     return out
 
 
+#: Тема с этим номером — «General» форум-группы. Номер существует, но
+#: передавать его в API НЕЛЬЗЯ: приходит 400 «message thread not found».
+#: Трактуем как «без темы».
+GENERAL_THREAD = "1"
+
+
 def parse_target(target: str):
-    """«chat:thread» → (chat, thread|None). Тема необязательна."""
+    """«chat:thread» → (chat, thread|None). Тема необязательна.
+
+    Единица в теме — не тема: см. `GENERAL_THREAD`.
+    """
     target = str(target).strip()
     if ":" in target:
         chat, thread = target.rsplit(":", 1)
         if thread.isdigit():
-            return chat, thread
+            return chat, (None if thread == GENERAL_THREAD else thread)
     return target, None
+
+
+def parse_targets(raw: str):
+    """Список получателей через запятую → [(chat, thread|None)].
+
+    Пусто — пустой список, а не ошибка: локальный прогон и отладка не
+    должны падать из-за ненастроенного бота.
+    """
+    out = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if part:
+            out.append(parse_target(part))
+    return out
 
 
 def send(token: str, target: str, text: str, header: str = "",
