@@ -1,0 +1,31 @@
+name: Тесты
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Тесты
+        # Тесты не ходят в сеть: транспорт всюду подменяется. Значит прогон
+        # ничего не стоит, ничего не пишет в боевые таблицы и не зависит от
+        # доступности внешних сервисов.
+        run: pytest -q
+      - name: Проверка стиля
+        run: ruff check mpcore tests

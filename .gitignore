@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+# Секретов здесь быть не должно вовсе, но пусть перехват стоит:
+*.json.key
+*service_account*.json
+api_keys*.txt
+*token*.txt
