@@ -29,3 +29,15 @@ jobs:
         run: pytest -q
       - name: Проверка стиля
         run: ruff check mpcore tests
+
+  gas:
+    # Половина ядра для таблиц — на другом языке, но правила в ней те же,
+    # и расходиться им нельзя. Проверяется тем же прогоном, что и питон.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Тесты Apps Script-ядра
+        run: node gas/test_mpcore.js
