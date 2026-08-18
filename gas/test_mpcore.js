@@ -147,6 +147,25 @@ test('нарезка не рвёт строку пополам', () => {
   assert.strictEqual(MpCore.splitText(text, 100).join('\n'), text);
 });
 
+test('сырая пачка отдаёт товары и не прячет отказ', () => {
+  reset([{ code: 200, body: JSON.stringify({ products: [{ id: 5, totalQuantity: 3 }] }) }]);
+  const good = MpCore.cardBatch([5]);
+  assert.strictEqual(good.ok, true);
+  assert.strictEqual(good.products[0].totalQuantity, 3);
+
+  reset([{ code: 429, body: '{"message":"превышен лимит"}' }]);
+  const bad = MpCore.cardBatch([5]);
+  assert.strictEqual(bad.ok, false);
+  assert.ok(bad.error.indexOf('лимит') >= 0);
+});
+
+test('пустое тело пачки — это «карточек нет», а не сбой', () => {
+  reset([{ code: 200, body: '' }]);
+  const answer = MpCore.cardBatch([5]);
+  assert.strictEqual(answer.ok, true);
+  assert.deepStrictEqual(answer.products, []);
+});
+
 // --- прогон ---------------------------------------------------------------
 
 let failed = 0;

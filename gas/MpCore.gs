@@ -22,7 +22,7 @@
  *  5. Суточная квота аналитики считается по контурам РАЗДЕЛЬНО: когда
  *     один контур наполняется, а второй стоит — дело не в токене.
  *
- * @version 0.5.0
+ * @version 0.7.0
  */
 
 var MpCore = (function () {
@@ -91,6 +91,27 @@ var MpCore = (function () {
     var low = String(body || '').toLowerCase();
     return low.indexOf('лимит') >= 0 || low.indexOf('limit') >= 0 ||
            low.indexOf('quota') >= 0;
+  }
+
+  /**
+   * Сырой ответ витрины по одной пачке: {ok, products, error}.
+   *
+   * Нужен там, где потребителю мало цены — например, ещё и остаток из той
+   * же карточки. Ретраи, пустое тело как факт и разбор отказа при этом
+   * общие: незачем писать их второй раз ради одного лишнего поля.
+   */
+  function cardBatch(ids, options) {
+    options = options || {};
+    var dest = options.dest || DEST_DEFAULT;
+    var url = CARD_URL + '?appType=1&curr=rub&spp=30&dest=' + dest +
+              '&nm=' + ids.map(String).join(';');
+    var answer = getJson(url, { 'User-Agent': 'Mozilla/5.0' }, options.tries);
+    if (!answer.ok) {
+      return { ok: false, products: [],
+               error: answer.quota ? 'исчерпан суточный лимит' : ('HTTP ' + answer.status) };
+    }
+    // Пустое тело — штатный ответ на скрытые и удалённые карточки.
+    return { ok: true, products: (answer.data && answer.data.products) || [], error: '' };
   }
 
   /**
@@ -268,7 +289,7 @@ var MpCore = (function () {
   }
 
   return {
-    VERSION: '0.5.0',
+    VERSION: '0.7.0',
     STATE_NONE: STATE_NONE,
     STATE_GONE: STATE_GONE,
     STATE_FAIL: STATE_FAIL,
@@ -276,6 +297,7 @@ var MpCore = (function () {
     DEST_DEFAULT: DEST_DEFAULT,
     walletPrice: walletPrice,
     getJson: getJson,
+    cardBatch: cardBatch,
     cardPrices: cardPrices,
     mpHistory: mpHistory,
     whySilent: whySilent,
