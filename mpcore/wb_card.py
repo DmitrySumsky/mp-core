@@ -53,13 +53,20 @@ def _product_kopeks(product: dict):
 
 
 def prices(ids, dest: str = DEST_DEFAULT, wallet: bool = True,
-           fetch=get_json, sleep=time.sleep):
+           convert=None, fetch=get_json, sleep=time.sleep):
     """{идентификатор: цена | состояние} по всем позициям, пачками.
 
     Идентификатор, которого нет в ответе, — «нет карточки»; пришедший без
     цены — «нет в наличии»; целиком не отдавшаяся пачка не попадает в
     результат вообще (дырка замера не должна выглядеть как факт о товаре).
+
+    `convert` — как из копеек получить число таблицы. По умолчанию цена с
+    бонусом кошелька (`wallet=True`) или рубли отбрасыванием копеек. Свой
+    пересчёт нужен там, где потребитель годами писал иначе: смена правила
+    округления сдвинула бы всю историю на рубль и выглядела бы как сбой.
     """
+    if convert is None:
+        convert = wallet_price if wallet else (lambda kopeks: kopeks // 100)
     ids = [str(x) for x in ids]
     out: dict[str, object] = {}
     for chunk in chunked(ids, BATCH):
@@ -76,7 +83,7 @@ def prices(ids, dest: str = DEST_DEFAULT, wallet: bool = True,
             seen.add(key)
             kopeks = _product_kopeks(product)
             if kopeks:
-                out[key] = wallet_price(kopeks) if wallet else kopeks // 100
+                out[key] = convert(kopeks)
             else:
                 out[key] = states.STATE_NONE
         for key in chunk:

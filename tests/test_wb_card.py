@@ -73,3 +73,17 @@ def test_cards_returns_passport():
     out = wb_card.cards(["7"], fetch=fetch, sleep=lambda s: None)
     assert out["7"]["brand"] == "B"
     assert out["7"]["supplier_id"] == 1
+
+
+def test_custom_convert_keeps_the_rounding_a_consumer_already_uses():
+    """Своё правило округления важнее «правильного»: история не должна съехать."""
+    fetch = fetch_of({"products": [product(1, 57050)]})
+    out = wb_card.prices(["1"], convert=lambda kopeks: round(kopeks / 100),
+                         fetch=fetch, sleep=lambda s: None)
+    assert out == {"1": 570}
+
+
+def test_without_wallet_price_is_roubles():
+    fetch = fetch_of({"products": [product(1, 57099)]})
+    out = wb_card.prices(["1"], wallet=False, fetch=fetch, sleep=lambda s: None)
+    assert out == {"1": 570}
