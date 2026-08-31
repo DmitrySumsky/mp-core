@@ -1,0 +1,14 @@
+{
+  "name": "<имя-модуля>",
+  "kind": "gas",
+  "standard": "pult@1.0.0",
+  "central": "central/build/central.js",
+  "central_sources": ["central/preamble.js", "central/main.gs"],
+  "loader": "loader/loader.gs",
+  "manifest": "loader/appsscript.json",
+  "books": [],
+  "tests": "node modules/<имя-модуля>/tests/run.js",
+  "build": "node modules/<имя-модуля>/tools/build.js",
+  "deploy": "node modules/<имя-модуля>/tools/deploy.js",
+  "deviations": []
+}
