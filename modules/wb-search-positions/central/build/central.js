@@ -1,4 +1,12 @@
-/* ПОЗИЦИИ В ПОИСКЕ WB — ЦЕНТРАЛЬНЫЙ КОД v1.0.0 — 17.09.2026 */
+/* ПОЗИЦИИ В ПОИСКЕ WB — ЦЕНТРАЛЬНЫЙ КОД v1.0.1 — 17.09.2026 */
+/* v1.0.1: КАЖДЫЙ СБОЙ ЖИВОГО ХОСТА ВЫДАЧИ ОПЛАЧИВАЛСЯ ЗАПРОСОМ В ЗАКРЫТЫЙ — первый полный прогон 17.09.2026
+   (439 запросов, локально тем же кодом): на запрос уходило 5,6 с вместо 2,7 с. Второй хост в этот день отвечал
+   403 на всё, но после любого отказа первого код шёл к нему — и платил ещё запросом и паузой.
+   • хост, отказавший три раза подряд, пропускается (POS_SEARCH_FAILS); список «мёртвых» фиксируется на начало
+     вызова — живой хост не выпадает из перебора посреди страницы; ответил — счётчик обнуляется; закрыты все —
+     счётчики сбрасываются, лимитер мог отпустить;
+   • попытки считаются по сделанным запросам, а не по месту в списке: пропуск хоста попытку не тратит.
+   Тесты: 26/26. */
 /* v1.0.0: ПОЗИЦИИ СНИМАЛИСЬ РУКАМИ ПО ОДНОМУ АРТИКУЛУ И НЕ ЗАПОМИНАЛИСЬ — запрос менеджера маркетплейса
    17.09.2026: «он сам места не запоминает? мне все артикулы сейчас прогонять?». До этого позиции снимал
    скилл по одному артикулу за 5 минут, история жила файлами на компьютере того, кто запускал.
@@ -312,7 +320,11 @@ var POS_SEARCH_MAX_TRIES = 6;
 
 /* Кто ответил последним — тот и первый в следующем запросе. Живёт одно исполнение. */
 var POS_SEARCH_ORDER = null;
-var POS_SEARCH_STATS = { requests: 0, failures: 0 };
+var POS_SEARCH_STATS = { requests: 0, failures: 0, skipped: 0 };
+/* v1.0.1. Отказы подряд по хосту. Хост, отказавший POS_SEARCH_DEAD_AFTER раз подряд, до конца исполнения
+   пропускается: иначе каждый сбой живого хоста оплачивается ещё и запросом в заведомо закрытый. */
+var POS_SEARCH_FAILS = {};
+var POS_SEARCH_DEAD_AFTER = 3;
 
 function posSearchOrder_() {
   if (POS_SEARCH_ORDER) return POS_SEARCH_ORDER;
@@ -338,9 +350,18 @@ function posSearchUrl_(host, ver, query, page, dest) {
  */
 function posSearchPage_(query, page, dest) {
   var order = posSearchOrder_();
-  var wait = 500;
-  for (var i = 0; i < order.length && i < POS_SEARCH_MAX_TRIES; i++) {
+  var wait = 500, tries = 0;
+  // «Мёртвые» хосты фиксируются НА НАЧАЛО вызова: живой хост, отказавший трижды внутри одного вызова,
+  // не должен выпасть из перебора посреди страницы. Закрыты все — счётчики сбрасываются: лимитер мог отпустить.
+  var dead = {}, alive = 0;
+  for (var a = 0; a < POS_SEARCH_HOSTS.length; a++) {
+    if ((POS_SEARCH_FAILS[POS_SEARCH_HOSTS[a]] || 0) >= POS_SEARCH_DEAD_AFTER) dead[POS_SEARCH_HOSTS[a]] = true; else alive++;
+  }
+  if (!alive) { dead = {}; POS_SEARCH_FAILS = {}; }
+  for (var i = 0; i < order.length && tries < POS_SEARCH_MAX_TRIES; i++) {
     var o = order[i];
+    if (dead[o.host]) { POS_SEARCH_STATS.skipped++; continue; }
+    tries++;
     POS_SEARCH_STATS.requests++;
     var code = 0, j = null;
     try {
@@ -353,9 +374,11 @@ function posSearchPage_(query, page, dest) {
     } catch (e) { j = null; }
     if (code === 200 && j && j.products) {
       if (i > 0) { order.splice(i, 1); order.unshift(o); }      // ответивший — вперёд
+      POS_SEARCH_FAILS[o.host] = 0;
       return { products: j.products, type: (j.metadata && j.metadata.catalog_type) || '' };
     }
     POS_SEARCH_STATS.failures++;
+    POS_SEARCH_FAILS[o.host] = (POS_SEARCH_FAILS[o.host] || 0) + 1;
     Utilities.sleep(wait);
     wait = Math.min(wait * 2, 4000);
   }
@@ -1375,7 +1398,7 @@ if (typeof module !== 'undefined' && module.exports) {
     posCfg_: posCfg_, posGroup_: posGroup_, posKey_: posKey_, posRu_: posRu_, posTokenInfo_: posTokenInfo_,
     posJamMerge_: posJamMerge_, posJamCall_: posJamCall_, posJamChunk_: posJamChunk_, posCards_: posCards_,
     posSearchPage_: posSearchPage_, posLocate_: posLocate_, posSearchUrl_: posSearchUrl_,
-    posResetSearch_: function () { POS_SEARCH_ORDER = null; POS_SEARCH_STATS = { requests: 0, failures: 0 }; },
+    posResetSearch_: function () { POS_SEARCH_ORDER = null; POS_SEARCH_FAILS = {}; POS_SEARCH_STATS = { requests: 0, failures: 0, skipped: 0 }; },
     posSearchStats_: function () { return POS_SEARCH_STATS; },
     posReadArticles_: posReadArticles_, posArticlesMark_: posArticlesMark_, posJamAppend_: posJamAppend_, posJamRead_: posJamRead_,
     posQueueBuild_: posQueueBuild_, posQueueRead_: posQueueRead_, posQueueFlush_: posQueueFlush_,

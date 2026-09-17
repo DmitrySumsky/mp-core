@@ -140,6 +140,25 @@ t('выдача: все хосты закрыты — null, а не «конец
   eq(C.posSearchStats_().failures, 6, 'число попыток ограничено');
 });
 
+t('выдача: хост, отказавший три раза подряд, пропускается до конца исполнения, попытки на него не тратятся', () => {
+  book([]);
+  const hosts = [];
+  let block = 0;                                   // лимитер живого хоста бьёт по всем версиям сразу
+  net({ searchResponder: url => {
+    const host = url.split('/')[2];
+    hosts.push(host);
+    if (host === 'u-search.wb.ru') return gas.resp(403, '');
+    if (block > 0) { block--; return gas.resp(429, ''); }
+    return null;
+  }, places: { 'чехол': [NM1] } });
+  for (let i = 0; i < 5; i++) {
+    block = i < 2 ? 2 : 3;
+    eq(C.posSearchPage_('чехол', 1, -1).products.length, 1, 'страница ' + i + ' получена');
+  }
+  eq(hosts.filter(h => h === 'u-search.wb.ru').length, 3, 'в закрытый хост сходили ровно три раза');
+  eq(C.posSearchStats_().skipped > 0, true, 'дальше он пропускался');
+});
+
 t('выдача: место = (страница − 1) × 100 + индекс + 1; нашли всех — дальше не листаем', () => {
   book([]);
   const o = net({ places: { 'чехол': filler(100).concat([7, NM1, 8, NM2]) } });
