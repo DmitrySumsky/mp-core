@@ -7,7 +7,11 @@ var POS_SEARCH_MAX_TRIES = 6;
 
 /* Кто ответил последним — тот и первый в следующем запросе. Живёт одно исполнение. */
 var POS_SEARCH_ORDER = null;
-var POS_SEARCH_STATS = { requests: 0, failures: 0 };
+var POS_SEARCH_STATS = { requests: 0, failures: 0, skipped: 0 };
+/* v1.0.1. Отказы подряд по хосту. Хост, отказавший POS_SEARCH_DEAD_AFTER раз подряд, до конца исполнения
+   пропускается: иначе каждый сбой живого хоста оплачивается ещё и запросом в заведомо закрытый. */
+var POS_SEARCH_FAILS = {};
+var POS_SEARCH_DEAD_AFTER = 3;
 
 function posSearchOrder_() {
   if (POS_SEARCH_ORDER) return POS_SEARCH_ORDER;
@@ -33,9 +37,18 @@ function posSearchUrl_(host, ver, query, page, dest) {
  */
 function posSearchPage_(query, page, dest) {
   var order = posSearchOrder_();
-  var wait = 500;
-  for (var i = 0; i < order.length && i < POS_SEARCH_MAX_TRIES; i++) {
+  var wait = 500, tries = 0;
+  // «Мёртвые» хосты фиксируются НА НАЧАЛО вызова: живой хост, отказавший трижды внутри одного вызова,
+  // не должен выпасть из перебора посреди страницы. Закрыты все — счётчики сбрасываются: лимитер мог отпустить.
+  var dead = {}, alive = 0;
+  for (var a = 0; a < POS_SEARCH_HOSTS.length; a++) {
+    if ((POS_SEARCH_FAILS[POS_SEARCH_HOSTS[a]] || 0) >= POS_SEARCH_DEAD_AFTER) dead[POS_SEARCH_HOSTS[a]] = true; else alive++;
+  }
+  if (!alive) { dead = {}; POS_SEARCH_FAILS = {}; }
+  for (var i = 0; i < order.length && tries < POS_SEARCH_MAX_TRIES; i++) {
     var o = order[i];
+    if (dead[o.host]) { POS_SEARCH_STATS.skipped++; continue; }
+    tries++;
     POS_SEARCH_STATS.requests++;
     var code = 0, j = null;
     try {
@@ -48,9 +61,11 @@ function posSearchPage_(query, page, dest) {
     } catch (e) { j = null; }
     if (code === 200 && j && j.products) {
       if (i > 0) { order.splice(i, 1); order.unshift(o); }      // ответивший — вперёд
+      POS_SEARCH_FAILS[o.host] = 0;
       return { products: j.products, type: (j.metadata && j.metadata.catalog_type) || '' };
     }
     POS_SEARCH_STATS.failures++;
+    POS_SEARCH_FAILS[o.host] = (POS_SEARCH_FAILS[o.host] || 0) + 1;
     Utilities.sleep(wait);
     wait = Math.min(wait * 2, 4000);
   }

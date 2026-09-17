@@ -4,7 +4,7 @@ if (typeof module !== 'undefined' && module.exports) {
     posCfg_: posCfg_, posGroup_: posGroup_, posKey_: posKey_, posRu_: posRu_, posTokenInfo_: posTokenInfo_,
     posJamMerge_: posJamMerge_, posJamCall_: posJamCall_, posJamChunk_: posJamChunk_, posCards_: posCards_,
     posSearchPage_: posSearchPage_, posLocate_: posLocate_, posSearchUrl_: posSearchUrl_,
-    posResetSearch_: function () { POS_SEARCH_ORDER = null; POS_SEARCH_STATS = { requests: 0, failures: 0 }; },
+    posResetSearch_: function () { POS_SEARCH_ORDER = null; POS_SEARCH_FAILS = {}; POS_SEARCH_STATS = { requests: 0, failures: 0, skipped: 0 }; },
     posSearchStats_: function () { return POS_SEARCH_STATS; },
     posReadArticles_: posReadArticles_, posArticlesMark_: posArticlesMark_, posJamAppend_: posJamAppend_, posJamRead_: posJamRead_,
     posQueueBuild_: posQueueBuild_, posQueueRead_: posQueueRead_, posQueueFlush_: posQueueFlush_,
