@@ -201,11 +201,13 @@ function yopCollectUnitData_(name, k) {
     });
     token = (res.paging || {}).nextPageToken;
   } while (token && (res.offerMappings || []).length);
-  var stocks = { fby: yopStocks_(k, k.fby), fbs: yopStocks_(k, k.fbs) };
-  var data = { at: new Date().toISOString(), offers: offers, stocks: stocks };
+  var stocks = { fby: yopStocks_(k, k.fby), fbs: yopStocks_(k, k.fbs) }, bids = null;
+  try { bids = yopBids_(k); } catch (e) { yopLog_(name + ': текущие ставки буста не получены — ' + e.message); }
+  var data = { at: new Date().toISOString(), offers: offers, stocks: stocks, bids: bids };
   yopJsonSave_(yopUnitDataName_(name), data);
   yopLog_(name + ': юнитка — карточек ' + Object.keys(offers).length + ', артикулов с остатком FBY ' +
-    Object.keys(stocks.fby).length + ', FBS ' + Object.keys(stocks.fbs).length);
+    Object.keys(stocks.fby).length + ', FBS ' + Object.keys(stocks.fbs).length + ', со ставкой буста ' +
+    (bids ? Object.keys(bids).length : '—'));
   yopCabState_(name, { unitAt: data.at, offers: Object.keys(offers).length });
   return data;
 }
@@ -226,5 +228,19 @@ function yopStocks_(k, campaign) {
     });
     token = (res.paging || {}).nextPageToken;
   } while (token && (res.warehouses || []).length);
+  return out;
+}
+/**
+ * v2.1.0. Текущие ставки буста продаж по артикулам магазина (bids/info): в ответе доли процента в сотых
+ * (1650 = 16,5 %), как bidFee в заказе. Артикула нет в ответе — буст по нему сейчас не включён (ставка 0).
+ */
+function yopBids_(k) {
+  var out = {}, token = null, res;
+  do {
+    var url = '/v2/businesses/' + k.businessId + '/bids/info?limit=500' + (token ? '&page_token=' + encodeURIComponent(token) : '');
+    res = JSON.parse(yopApi_(k.apiKey, 'post', url, {}).getContentText()).result || {};
+    (res.bids || []).forEach(function (b) { out[String(b.sku)] = Number(b.bid || 0) / 10000; });
+    token = (res.paging || {}).nextPageToken;
+  } while (token && (res.bids || []).length);
   return out;
 }

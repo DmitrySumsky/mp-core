@@ -118,6 +118,7 @@ function market(orders, svc) {
     if (url.indexOf('/offers/stocks') > 0) {
       return gas.resp(200, { result: { warehouses: [{ offers: [{ offerId: 'A', stocks: [{ type: 'AVAILABLE', count: 40 }, { type: 'FIT', count: 45 }] }] }], paging: {} } });
     }
+    if (url.indexOf('/bids/info') > 0) return gas.resp(200, { result: { bids: [{ sku: 'A', bid: 1000 }], paging: {} } });
     if (/\/campaigns\/\d+$/.test(url)) return gas.resp(opt.headers['Api-Key'] === 'k-a' ? 200 : 401, {});
     throw new Error('неожиданный запрос ' + url);
   };
@@ -201,11 +202,26 @@ t('«📈 по дням»: 21 день, вчера сверху формулам
   eq(s.get(5, 24), '', 'вчера — факта ещё нет');
 });
 
-t('«🧮 юнитка»: цены и остатки из Маркета, формулы на 44 колонки', () => {
-  const s = env.ss.getSheetByName(C.YOP_SH.unit), row = s.rows[4];
-  eq(row.length, C.YOP_UNIT_HEAD.length, 'колонок');
-  eq(row[0], 'Кабинет-А'); eq(row[1], 'A'); eq(row[2], 'Товар А'); eq(row[4], 1100); eq(row[9], 40, 'остаток FBY');
-  eq(row[37], '=AJ5-AK5', 'ЧП на штуку формулой'); eq(row[43], 'юнитка');
+const U = (s, r, h) => s.get(r, C.YOP_UNIT_HEAD.indexOf(h) + 1);
+t('«🧮 юнитка»: цена и ставка буста сейчас из Маркета, остатки, факт и сценарий формулами', () => {
+  const s = env.ss.getSheetByName(C.YOP_SH.unit);
+  eq(s.rows[4].length, C.YOP_UNIT_HEAD.length, 'колонок');
+  eq(U(s, 5, 'Кабинет'), 'Кабинет-А'); eq(U(s, 5, 'Артикул'), 'A'); eq(U(s, 5, 'Наименование'), 'Товар А');
+  eq(U(s, 5, 'Цена в кабинете сейчас, ₽'), 1100); eq(U(s, 5, 'Ставка буста сейчас'), 0.1, 'bid 1000 = 10 %');
+  eq(U(s, 5, 'Остаток FBY (доступно), шт'), 40); eq(U(s, 5, 'Себес найден'), 'юнитка');
+  ok(/^=IF\(\w+5="",IF\(\w+5="",\w+5,\w+5\),\w+5\)$/.test(U(s, 5, 'Цена в сценарии, ₽')), U(s, 5, 'Цена в сценарии, ₽'));
+  ok(String(U(s, 5, 'ЧП на штуку (сценарий), ₽')).indexOf('*25/100') > 0, 'налог 25 % в сценарии');
+  eq(s.get(3, C.YOP_UNIT_HEAD.indexOf('Ваша цена, ₽') + 1).indexOf('Сценарий'), 0, 'надпись над блоком');
+});
+
+t('сценарий: «Ваша цена» и «Ваша ставка» переживают прогон; формула сценария = расчёт модели', () => {
+  const s = env.ss.getSheetByName(C.YOP_SH.unit);
+  s.set(5, C.YOP_UNIT_HEAD.indexOf('Ваша цена, ₽') + 1, 1500); s.set(5, C.YOP_UNIT_HEAD.indexOf('Ваша ставка буста, %') + 1, 0.05);
+  C.yopRecalcSheets();
+  eq(U(s, 5, 'Ваша цена, ₽'), 1500); eq(U(s, 5, 'Ваша ставка буста, %'), 0.05);
+  const x = { coef: { выкуп: 0.9, тариф: 0.49, буст_k: 0.81, доставка: 0, перевод: 0, миля: 0, эквайринг: 0, возврат: 0, прочее: 0 },
+    price: 1000, bid: 0.2, drr: 0, cogs: 100 };
+  near(C.yopUnitCalc_(x, { price: 1500, bid: 0.05 }).ЧП, (1500 - 1500 * 0.49 - 1500 * 0.05 * 0.81 / 0.9 - 100) * 0.75, 'ЧП сценария');
 });
 
 t('повторный прогон того же дня не дублирует блок; следующий день встаёт сверху', () => {

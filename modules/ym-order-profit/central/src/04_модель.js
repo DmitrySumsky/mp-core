@@ -238,6 +238,7 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
       priceCab: o.price || null, price7: price7, price: price7 || o.price || 0,
       n30: a.n30, fby: (st.fby || {})[s] || 0, fbs: (st.fbs || {})[s] || 0,
       bid: a.gmv7 ? a.bidgmv7 / a.gmv7 : 0, drr: drr,
+      bidNow: unitData && unitData.bids ? unitData.bids[s] || 0 : null,
       coef: p.c, src: p.src, cogs: cogs.hasOwnProperty(s) ? cogs[s] : null
     };
   });
@@ -245,11 +246,15 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
   return { rows: rows, drr: drr, shows: shows, gmv30: gmv30 };
 }
 
-/** v2.0.0. Экономика штуки той же формулой, что стоит в ячейках юнитки (для тестов и сверки). */
-function yopUnitCalc_(x) {
-  var c = x.coef, P = x.price, b = c.выкуп || 1, cg = x.cogs || 0;
+/**
+ * v2.1.0. Экономика выкупленной штуки той же формулой, что стоит в ячейках юнитки (для тестов и сверки).
+ * over — { price, bid }: сценарий «своя цена и ставка буста»; без него — факт за 7 дней.
+ */
+function yopUnitCalc_(x, over) {
+  var c = x.coef, P = over && over.price != null ? over.price : x.price, bid = over && over.bid != null ? over.bid : x.bid;
+  var b = c.выкуп || 1, cg = x.cogs || 0;
   var m = {
-    комиссия: P * c.тариф, буст: P * x.bid * c.буст_k / b, доставка: P * c.доставка / b, миля: c.миля,
+    комиссия: P * c.тариф, буст: P * bid * c.буст_k / b, доставка: P * c.доставка / b, миля: c.миля,
     перевод: P * c.перевод / b, эквайринг: c.эквайринг / b, возврат: c.возврат / b, прочее: c.прочее / b
   };
   var mp = 0;

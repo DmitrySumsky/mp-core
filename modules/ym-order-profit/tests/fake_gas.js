@@ -24,6 +24,9 @@ FakeSheet.prototype.getLastRow = function () {
   while (n && !this.rows[n - 1].some(function (x) { return x !== undefined && x !== null && x !== ''; })) n--;
   return n;
 };
+FakeSheet.prototype.getLastColumn = function () {
+  return Math.max.apply(null, [0].concat(this.rows.map(function (r) { var n = r.length; while (n && (r[n - 1] === undefined || r[n - 1] === '')) n--; return n; })));
+};
 FakeSheet.prototype.getMaxRows = function () { return Math.max(this.maxRows, this.rows.length); };
 FakeSheet.prototype.clear = function () { this.rows = []; this.formats = {}; return this; };
 FakeSheet.prototype.insertRowsBefore = function (r, n) {

@@ -214,63 +214,135 @@ function yopUpdateFacts_(sh, all, upto) {
 
 // --- «🧮 ЧП ЯМ юнитка» ----------------------------------------------------------------------
 
-var YOP_UNIT_HEAD = ['Кабинет', 'Артикул', 'Наименование', 'Статус на Маркете', 'Цена в кабинете, ₽',
-  'Цена продажи ср. за 7 дн (факт), ₽', 'Цена для расчёта, ₽', 'Заказано за 30 дн, шт', 'Заказов в день, шт',
-  'Остаток FBY (доступно), шт', 'Остаток FBS (доступно), шт', 'Хватит на, дней',
-  'Выкуп', 'Тариф комиссии', 'Ставка буста ср. за 7 дн', 'Буст: доля ставки к списанию', 'Доставка, % цены',
-  'Перевод денег, % цены', 'Ср. миля, ₽ на доставл.', 'Эквайринг, ₽ на заказ', 'Невыкуп/возврат, ₽ на заказ',
-  'Прочее по заказу, ₽ на заказ', 'Реклама за показы, % от заказов (условно)', 'Себес, ₽',
-  'Комиссия, ₽', 'Буст продаж, ₽', 'Доставка, ₽', 'Ср. миля, ₽', 'Перевод денег, ₽', 'Эквайринг, ₽',
-  'Невыкупы/возвраты, ₽', 'Прочее по заказу, ₽', 'Расходы Маркета на штуку, ₽', 'Маржа до рекламы за показы, ₽',
-  'Реклама за показы (условно), ₽', 'Маржа, ₽', 'Налог 25% (как в юнитке), ₽', 'ЧП на штуку, ₽', 'Маржинальность',
-  'Рентабельность к себесу', 'ЧП в месяц при текущих продажах, ₽', 'Коэффициенты по', 'Когорта, шт', 'Себес найден'];
+/**
+ * v2.1.0. Колонки юнитки: ключ, заголовок, надпись над блоком, формат, заливка и значение строки.
+ * Формулы ссылаются на колонки по ключу (L('ключ')), поэтому порядок меняется одной правкой списка.
+ *   блоки: карточка и остатки → СЦЕНАРИЙ (своя цена и ставка буста) → факт за 7 дней → коэффициенты → расходы.
+ * «Ваша цена» и «Ваша ставка буста» вписывает человек: прогон их не затирает (переносит по кабинету и артикулу).
+ */
+function yopTaxF_(e) { return e + '*' + Math.round(YOP.TAX * 100) + '/100'; }
+function yopDivB_(e, L) { return '=IFERROR(' + e + '/' + L('k_buyout') + ',0)'; }
 
-/** Юнитка по всем кабинетам. unitData — { кабинет: данные карточек и остатков } (файлы в папке кэша). */
+var YOP_UNIT_SPEC = [
+  ['cab', 'Кабинет', '', '', '', function (x, L, cab) { return cab.name; }],
+  ['sku', 'Артикул', '', '@', '', function (x) { return x.sku; }],
+  ['name', 'Наименование', '', '', '', function (x) { return x.name; }],
+  ['status', 'Статус на Маркете', '', '', '', function (x) { return x.status; }],
+  ['priceNow', 'Цена в кабинете сейчас, ₽', 'Карточка и остатки', 'rub', '', function (x) { return x.priceCab || ''; }],
+  ['price7', 'Цена продажи ср. за 7 дн (факт), ₽', '', 'rub', '', function (x) { return x.price7 == null ? '' : Math.round(x.price7); }],
+  ['bidNow', 'Ставка буста сейчас', '', 'pct', '', function (x) { return x.bidNow == null ? '' : x.bidNow; }],
+  ['bid7', 'Ставка буста ср. за 7 дн (факт)', '', 'pct', '', function (x) { return x.bid; }],
+  ['n30', 'Заказано за 30 дн, шт', '', 'int', '', function (x) { return x.n30; }],
+  ['perDay', 'Заказов в день, шт', '', 'num1', '', function (x, L) { return '=' + L('n30') + '/' + YOP.UNIT_DAYS; }],
+  ['fby', 'Остаток FBY (доступно), шт', '', 'int', '', function (x) { return x.fby; }],
+  ['fbs', 'Остаток FBS (доступно), шт', '', 'int', '', function (x) { return x.fbs; }],
+  ['days', 'Хватит на, дней', '', 'int', '', function (x, L) {
+    return '=IF(' + L('perDay') + '=0,"",ROUND((' + L('fby') + '+' + L('fbs') + ')/' + L('perDay') + ',0))'; }],
+  // сценарий: своя цена и ставка буста
+  ['myPrice', 'Ваша цена, ₽', 'Сценарий: впишите свою цену и ставку буста (пусто = текущие из кабинета)', 'rub', 'blue',
+    function (x, L, cab, keep) { return keep.price; }],
+  ['myBid', 'Ваша ставка буста, %', '', 'pct', 'blue', function (x, L, cab, keep) { return keep.bid; }],
+  ['sPrice', 'Цена в сценарии, ₽', '', 'rub', 'green', function (x, L) {
+    return '=IF(' + L('myPrice') + '="",IF(' + L('priceNow') + '="",' + L('price7') + ',' + L('priceNow') + '),' + L('myPrice') + ')'; }],
+  ['sBid', 'Ставка буста в сценарии', '', 'pct', 'green', function (x, L) {
+    return '=IF(' + L('myBid') + '="",IF(' + L('bidNow') + '="",' + L('bid7') + ',' + L('bidNow') + '),IF(' + L('myBid') + '>1,' +
+      L('myBid') + '/100,' + L('myBid') + '))'; }],
+  ['sCost', 'Расходы Маркета на штуку (сценарий), ₽', '', 'rub', 'green', function (x, L) {
+    return '=' + L('sPrice') + '*' + L('k_tariff') + '+' + L('k_mile') + '+IFERROR((' + L('sPrice') + '*' + L('sBid') + '*' + L('k_boost') +
+      '+' + L('sPrice') + '*' + L('k_deliv') + '+' + L('sPrice') + '*' + L('k_transfer') + '+' + L('k_acq') + '+' + L('k_ret') + '+' +
+      L('k_other') + ')/' + L('k_buyout') + ',0)'; }],
+  ['sMargin', 'Маржа (сценарий), ₽', '', 'rub', 'green', function (x, L) {
+    return '=' + L('sPrice') + '-' + L('sCost') + '-' + L('cogs') + '-IFERROR(' + L('sPrice') + '*' + L('k_shows') + '/' + L('k_buyout') + ',0)'; }],
+  ['sProfit', 'ЧП на штуку (сценарий), ₽', '', 'rub', 'greenBold', function (x, L) { return '=' + L('sMargin') + '-' + yopTaxF_(L('sMargin')); }],
+  ['sPct', 'Маржинальность (сценарий)', '', 'pct', 'green', function (x, L) { return '=IFERROR(' + L('sProfit') + '/' + L('sPrice') + ',0)'; }],
+  // факт за 7 дней
+  ['price', 'Цена (факт 7 дн, нет продаж = кабинет), ₽', 'Факт: цена и ставка буста из заказов за 7 дней', 'rub', '', function (x, L) {
+    return '=IF(' + L('price7') + '="",' + L('priceNow') + ',' + L('price7') + ')'; }],
+  ['fCost', 'Расходы Маркета на штуку, ₽', '', 'rub', '', function (x, L) { return '=SUM(' + L('c_comm') + ':' + L('c_other') + ')'; }],
+  ['fBefore', 'Маржа до рекламы за показы, ₽', '', 'rub', '', function (x, L) { return '=' + L('price') + '-' + L('fCost') + '-' + L('cogs'); }],
+  ['fShows', 'Реклама за показы (условно), ₽', '', 'rub', 'grey', function (x, L) { return yopDivB_(L('price') + '*' + L('k_shows'), L); }],
+  ['fMargin', 'Маржа, ₽', '', 'rub', '', function (x, L) { return '=' + L('fBefore') + '-' + L('fShows'); }],
+  ['fTax', 'Налог 25% (как в юнитке), ₽', '', 'rub', '', function (x, L) { return '=' + yopTaxF_(L('fMargin')); }],
+  ['fProfit', 'ЧП на штуку, ₽', '', 'rub', 'bold', function (x, L) { return '=' + L('fMargin') + '-' + L('fTax'); }],
+  ['fPct', 'Маржинальность', '', 'pct', '', function (x, L) { return '=IFERROR(' + L('fProfit') + '/' + L('price') + ',0)'; }],
+  ['fRoi', 'Рентабельность к себесу', '', 'pct', '', function (x, L) { return '=IFERROR(' + L('fProfit') + '/' + L('cogs') + ',"")'; }],
+  ['fMonth', 'ЧП в месяц при текущих продажах, ₽', '', 'rub', '', function (x, L) {
+    return '=' + L('fProfit') + '*' + L('n30') + '*' + L('k_buyout'); }],
+  // коэффициенты модели: общие для сценария и факта
+  ['k_buyout', 'Выкуп', 'Коэффициенты модели (факт удержаний по дозревшим заказам), можно менять', 'pct', 'blue', function (x) { return x.coef.выкуп; }],
+  ['k_tariff', 'Тариф комиссии', '', 'pct', 'blue', function (x) { return x.coef.тариф; }],
+  ['k_boost', 'Буст: доля ставки к списанию', '', 'pct', 'blue', function (x) { return x.coef.буст_k; }],
+  ['k_deliv', 'Доставка, % цены', '', 'pct', 'blue', function (x) { return x.coef.доставка; }],
+  ['k_transfer', 'Перевод денег, % цены', '', 'pct', 'blue', function (x) { return x.coef.перевод; }],
+  ['k_mile', 'Ср. миля, ₽ на доставл.', '', 'rub2', 'blue', function (x) { return x.coef.миля; }],
+  ['k_acq', 'Эквайринг, ₽ на заказ', '', 'rub2', 'blue', function (x) { return x.coef.эквайринг; }],
+  ['k_ret', 'Невыкуп/возврат, ₽ на заказ', '', 'rub2', 'blue', function (x) { return x.coef.возврат; }],
+  ['k_other', 'Прочее по заказу, ₽ на заказ', '', 'rub2', 'blue', function (x) { return x.coef.прочее; }],
+  ['k_shows', 'Реклама за показы, % от заказов (условно)', '', 'pct', 'grey', function (x) { return x.drr; }],
+  ['cogs', 'Себес, ₽', '', 'rub', '', function (x, L, cab) { return yopCogsFormula_(cab.cogs, L('cab', true), L('sku', true)); }],
+  // расшифровка «Расходы Маркета на штуку» (факт)
+  ['c_comm', 'Комиссия, ₽', 'Расходы на выкупленную штуку по факту', 'rub', '', function (x, L) { return '=' + L('price') + '*' + L('k_tariff'); }],
+  ['c_boost', 'Буст продаж, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('price') + '*' + L('bid7') + '*' + L('k_boost'), L); }],
+  ['c_deliv', 'Доставка, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('price') + '*' + L('k_deliv'), L); }],
+  ['c_mile', 'Ср. миля, ₽', '', 'rub', '', function (x, L) { return '=' + L('k_mile'); }],
+  ['c_transfer', 'Перевод денег, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('price') + '*' + L('k_transfer'), L); }],
+  ['c_acq', 'Эквайринг, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('k_acq'), L); }],
+  ['c_ret', 'Невыкупы/возвраты, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('k_ret'), L); }],
+  ['c_other', 'Прочее по заказу, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('k_other'), L); }],
+  ['src', 'Коэффициенты по', '', '', '', function (x) { return x.src; }],
+  ['cohort', 'Когорта, шт', '', 'int', '', function (x) { return x.coef.когорта_шт; }],
+  ['cogsSrc', 'Себес найден', '', '', '', function (x, L, cab) { return yopCogsSrc_(cab, x.sku); }]
+];
+var YOP_UNIT_HEAD = YOP_UNIT_SPEC.map(function (c) { return c[1]; });
+var YOP_UNIT_FMT = { rub: '#,##0', rub2: '#,##0.00', pct: '0.0%', int: '#,##0', num1: '#,##0.0' };
+var YOP_UNIT_BG = { blue: YOP_BLUE, grey: YOP_GREY, green: '#e6f4ea', greenBold: '#e6f4ea' };
+
+/** v2.1.0. «Ваша цена» и «Ваша ставка буста» с прошлого прогона: { "кабинет|артикул": { price, bid } }. */
+function yopUnitKeep_(sh) {
+  var out = {}, last = sh.getLastRow();
+  if (last <= YOP_HEAD_ROW) return out;
+  var head = sh.getRange(YOP_HEAD_ROW, 1, 1, sh.getLastColumn()).getValues()[0].map(function (h) { return String(h).trim(); });
+  var ip = head.indexOf('Ваша цена, ₽'), ib = head.indexOf('Ваша ставка буста, %');
+  if (ip < 0 && ib < 0) return out;
+  sh.getRange(YOP_HEAD_ROW + 1, 1, last - YOP_HEAD_ROW, head.length).getValues().forEach(function (r) {
+    var p = ip >= 0 ? r[ip] : '', b = ib >= 0 ? r[ib] : '';
+    if (p !== '' || b !== '') out[String(r[0]) + '|' + String(r[1])] = { price: p, bid: b };
+  });
+  return out;
+}
+
+/** Юнитка по всем кабинетам: карточки, остатки и ставки — файлы в папке кэша от последнего сбора. */
 function yopWriteUnit_(day, all) {
-  var sh = yopSheet_(YOP_SH.unit), rows = [], r = YOP_HEAD_ROW + 1, info = [];
+  var sh = yopSheet_(YOP_SH.unit), keep = yopUnitKeep_(sh), rows = [], r = YOP_HEAD_ROW + 1, info = [], idx = {};
+  YOP_UNIT_SPEC.forEach(function (c, i) { idx[c[0]] = yopCol_(i + 1); });
   all.forEach(function (cab) {
     var data = yopJsonLoad_(yopUnitDataName_(cab.name));
     var u = yopUnitRows_(cab.cache, cab.flat, day, yopCogsValues_(cab.cogs), cab.settings, data);
     info.push(cab.name + ': реклама за показы ' + (u.drr * 100).toFixed(1) + ' % от заказов' +
-      (data ? '' : ' (цены и остатки ещё не загружены)'));
+      (data ? (data.bids ? '' : ', текущих ставок буста нет') : ' (цены и остатки ещё не загружены)'));
     u.rows.forEach(function (x) {
-      var c = x.coef, g = function (col) { return col + r; }, div = function (e) { return '=IFERROR(' + e + '/M' + r + ',0)'; };
-      rows.push([cab.name, x.sku, x.name, x.status, x.priceCab || '', x.price7 == null ? '' : Math.round(x.price7), Math.round(x.price),
-        x.n30, '=H' + r + '/' + YOP.UNIT_DAYS, x.fby, x.fbs, '=IF(I' + r + '=0,"",ROUND((J' + r + '+K' + r + ')/I' + r + ',0))',
-        c.выкуп, c.тариф, x.bid, c.буст_k, c.доставка, c.перевод, c.миля, c.эквайринг, c.возврат, c.прочее, x.drr,
-        yopCogsFormula_(cab.cogs, '$A' + r, '$B' + r),
-        '=' + g('G') + '*' + g('N'), div(g('G') + '*' + g('O') + '*' + g('P')), div(g('G') + '*' + g('Q')), '=' + g('S'),
-        div(g('G') + '*' + g('R')), div(g('T')), div(g('U')), div(g('V')),
-        '=SUM(Y' + r + ':AF' + r + ')', '=G' + r + '-AG' + r + '-X' + r, div(g('G') + '*' + g('W')), '=AH' + r + '-AI' + r,
-        '=AJ' + r + '*' + Math.round(YOP.TAX * 100) + '/100', '=AJ' + r + '-AK' + r, '=IFERROR(AL' + r + '/G' + r + ',0)',
-        '=IFERROR(AL' + r + '/X' + r + ',"")', '=AL' + r + '*H' + r + '*M' + r, x.src, c.когорта_шт, yopCogsSrc_(cab, x.sku)]);
+      var L = function (key, abs) { return (abs ? '$' : '') + idx[key] + r; };
+      var k = keep[cab.name + '|' + x.sku] || { price: '', bid: '' };
+      rows.push(YOP_UNIT_SPEC.map(function (c) { return c[5](x, L, cab, k); }));
       r++;
     });
   });
   sh.clear();
   yopTitle_(sh, 'Юнитка ЯМ на данных Маркета на ' + yopRu_(day) + ' — экономика одной выкупленной штуки (' + YOP_VERSION + ')',
-    'Цена — факт продаж за 7 дней (нет продаж — цена в кабинете); расходы Маркета — факт удержаний по дозревшим заказам ' +
-    '(отчёт «Стоимость услуг»); остатки — доступно на складах. Синие колонки (G, M–W) можно менять руками — ' +
-    'остальное пересчитается. Реклама за показы делится условно, долей от суммы заказов кабинета. ' + info.join('; ') + '.');
+    'Сценарий: впишите «Ваша цена» и «Ваша ставка буста» — зелёные колонки сразу покажут маржу и ЧП на штуку; пусто — по текущей ' +
+    'цене в кабинете и текущей ставке буста. Вписанное прогон не затирает. Факт — цена и ставка из заказов за 7 дней. ' +
+    'Расходы Маркета — факт удержаний по дозревшим заказам; реклама за показы делится условно. ' + info.join('; ') + '.');
+  sh.getRange(3, 1, 1, YOP_UNIT_SPEC.length).setValues([YOP_UNIT_SPEC.map(function (c) { return c[2]; })]).setFontWeight('bold');
   yopHeader_(sh, YOP_UNIT_HEAD, { 1: 130, 2: 220, 3: 320, 4: 160 });
   if (rows.length) {
     var n = rows.length, R = YOP_HEAD_ROW + 1;
-    sh.getRange(R, 2, n, 1).setNumberFormat('@');
+    sh.getRange(R, 2, n, 1).setNumberFormat('@');                // артикул — текстом ДО записи
     sh.getRange(R, 1, n, rows[0].length).setValues(yopFx_(rows));
-    sh.getRange(R, 5, n, 3).setNumberFormat('#,##0');
-    sh.getRange(R, 8, n, 5).setNumberFormat('#,##0');
-    sh.getRange(R, 9, n, 1).setNumberFormat('#,##0.0');
-    sh.getRange(R, 13, n, 6).setNumberFormat('0.0%');
-    sh.getRange(R, 19, n, 4).setNumberFormat('#,##0.00');
-    sh.getRange(R, 23, n, 1).setNumberFormat('0.0%');
-    sh.getRange(R, 24, n, 15).setNumberFormat('#,##0');
-    sh.getRange(R, 39, n, 2).setNumberFormat('0.0%');
-    sh.getRange(R, 41, n, 1).setNumberFormat('#,##0');
-    sh.getRange(R, 7, n, 1).setBackground(YOP_BLUE);
-    sh.getRange(R, 13, n, 11).setBackground(YOP_BLUE);
-    sh.getRange(R, 23, n, 1).setBackground(YOP_GREY);
-    sh.getRange(R, 35, n, 1).setBackground(YOP_GREY);
-    sh.getRange(R, 38, n, 1).setFontWeight('bold');
+    YOP_UNIT_SPEC.forEach(function (c, i) {
+      if (YOP_UNIT_FMT[c[3]]) sh.getRange(R, i + 1, n, 1).setNumberFormat(YOP_UNIT_FMT[c[3]]);
+      if (YOP_UNIT_BG[c[4]]) sh.getRange(R, i + 1, n, 1).setBackground(YOP_UNIT_BG[c[4]]);
+      if (c[4] === 'bold' || c[4] === 'greenBold') sh.getRange(R, i + 1, n, 1).setFontWeight('bold');
+    });
   }
   sh.setFrozenColumns(2);
   return rows.length;
@@ -341,10 +413,13 @@ function yopWriteHelp_() {
      'колонки O (до рекламы за показы, хранения, подписки и налога). «Судьба известна» — какая доля заказов дня уже доставлена ' +
      'или отменена: пока она меньше 100 %, факт ещё дорастёт. Каждый прогон обновляет факт по всем дням за последние 6 недель.'], [''],
     ['Юнитка на данных Маркета'],
-    ['Лист «' + YOP_SH.unit + '»: по каждому артикулу с заказами за 30 дней или с остатком — цена в кабинете и фактическая цена ' +
-     'продажи за 7 дней, остатки FBY и FBS (доступно), на сколько дней хватит, расходы Маркета на одну выкупленную штуку по тем ' +
-     'же коэффициентам, что прогноз, себес, реклама за показы условно (доля от суммы заказов кабинета за 30 дней), налог 25 %, ' +
-     'ЧП на штуку и в месяц. Синие колонки можно менять руками — например, вписать новую цену и посмотреть ЧП.'], [''],
+    ['Лист «' + YOP_SH.unit + '»: по каждому артикулу с заказами за 30 дней или с остатком — цена в кабинете и ставка буста СЕЙЧАС, ' +
+     'цена и ставка по факту заказов за 7 дней, остатки FBY и FBS (доступно), на сколько дней хватит, расходы Маркета на одну ' +
+     'выкупленную штуку по тем же коэффициентам, что прогноз, себес, реклама за показы условно (доля от суммы заказов кабинета ' +
+     'за 30 дней), налог 25 %, ЧП на штуку и в месяц.'],
+    ['Сценарий: впишите «Ваша цена» и «Ваша ставка буста» — зелёные колонки сразу покажут расходы, маржу, ЧП на штуку и ' +
+     'маржинальность при этих настройках. Пусто — считается по текущей цене и ставке из кабинета. Вписанное прогон не затирает; ' +
+     'ставку можно писать и «5%», и «5».'], [''],
     ['Себестоимость'],
     ['Сначала лист «' + YOP_SH.cogs + '» (кабинет | артикул магазина | себес), если там нет — юнитка кабинета по «Код 1С». ' +
      'Колонка «Себес найден» показывает источник, «НЕТ — себес 0» — артикул, который надо добавить.'], [''],
