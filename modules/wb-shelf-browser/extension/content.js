@@ -1,5 +1,14 @@
-/* ПОЛКИ WB — СБОР ИЗ БРАУЗЕРА v1.0.0 — 22.09.2026 */
+/* ПОЛКИ WB — СБОР ИЗ БРАУЗЕРА v1.0.1 — 22.09.2026 */
 /*
+ * v1.0.1 — 22.09.2026
+ * ПАНЕЛЬ МЕЛЬКНУЛА И ПРОПАЛА, СБОР НЕ НАЧАЛСЯ — первый запуск у владельца. WB сначала
+ * отдаёт страницу проверки браузера и после неё сам перезагружает вкладку: расширение
+ * успевало стереть метку #wbshelf из адреса, а после перезагрузки начинать было не с чего.
+ *   • Метка запоминается в хранилище расширения сразу (живёт 10 минут), адрес не трогаем,
+ *     пока не заведён сам сбор.
+ *   • Старт ждёт, пока пройдёт проверка WB (страница с ключом сессии сайта), до 2 минут.
+ *   • Панель возвращается, если страница её сотрёт при перерисовке.
+ *
  * v1.0.0 — 22.09.2026
  * WB ЗАКРЫЛ ВИТРИНУ АНТИБОТОМ ДЛЯ ОБЛАКА — полки и цены книг брендов снимаются
  * здесь, на открытой человеком вкладке wildberries.ru, по кнопке из книги.
@@ -16,7 +25,9 @@
  */
 (() => {
   'use strict';
-  const VERSION = '1.0.0';
+  const VERSION = '1.0.1';
+  const KEY_PENDING = 'wbshelf.pending';
+  const PENDING_MS = 10 * 60 * 1000;
   const KEY_JOB = 'wbshelf.job';
   const KEY_WHO = 'wbshelf.who';
   const WORKERS = 3;            // одновременных полок
@@ -52,6 +63,8 @@
     document.documentElement.appendChild(panel);
     panel.querySelectorAll('[data-k]').forEach(el => { lines[el.dataset.k] = el; });
     lines.stop.onclick = () => { stopRequested = true; say('Останавливаю…'); };
+    // Сайт перерисовывает страницу целиком — панель при этом может пропасть.
+    setInterval(() => { if (!panel.isConnected) document.documentElement.appendChild(panel); }, 1000);
   }
   function set(k, text) { ui(); lines[k].textContent = text; }
   function say(text, color) { set('msg', text); lines.msg.style.color = color || '#f2f2f2'; }
@@ -222,20 +235,38 @@
     return job;
   }
 
+  /** Страница проверки WB или ещё не готовый сайт: ключа сессии сайта пока нет. */
+  const siteReady = () => !!localStorage.getItem('wbx__sessionID') &&
+    !document.querySelector('script[src*="__wbaas/challenges"]');
+
   async function main() {
-    const m = location.hash.match(/wbshelf=([\w-]+)/);
+    const hm = location.hash.match(/wbshelf=([\w-]+)/);
+    if (hm) await store.set(KEY_PENDING, {contour: hm[1], ts: Date.now()});
+    const pending = await store.get(KEY_PENDING);
+    const fresh = pending && Date.now() - pending.ts < PENDING_MS ? pending : null;
+    const m = fresh ? [null, fresh.contour] : null;
     let job = await store.get(KEY_JOB);
     if (!m && !job) return;                                  // обычная страница WB
+
+    ui();
+    for (let i = 0; i < 120 && !siteReady(); i++) {
+      say('Жду, пока WB проверит браузер…', '#ffd479');
+      await sleep(1000);
+    }
+    if (!siteReady()) {
+      say('WB так и не открылся. Обновите страницу (F5) — сбор начнётся сам.', '#ffd479');
+      return;
+    }
 
     if (job && job.tab !== TAB && Date.now() - (job.beat || 0) < HEARTBEAT_MS) {
       if (m) { ui(); say('Сбор уже идёт в другой вкладке WB — дождитесь его там.'); }
       return;
     }
-    if (m) history.replaceState(null, '', location.pathname + location.search);
-    ui();
     try {
       if (!job || (m && job.contour !== m[1])) job = await start(m[1]);
       else say('Продолжаю сбор с того же места…');
+      await store.del(KEY_PENDING);
+      if (hm) history.replaceState(null, '', location.pathname + location.search);
       await run(job);
     } catch (e) {
       if (e instanceof Blocked) {
