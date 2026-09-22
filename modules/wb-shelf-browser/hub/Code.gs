@@ -1,5 +1,9 @@
-/* WB SHELF BROWSER — ХАБ СБОРА v1.0.0 — 22.09.2026 */
+/* WB SHELF BROWSER — ХАБ СБОРА v1.0.1 — 22.09.2026 */
 /*
+ * v1.0.1 — 22.09.2026
+ * ДИАГНОСТИКА ПОЛОК НЕ ДОЛЖНА ТРОГАТЬ КНИГИ — контуры с именем diag* хаб хранит,
+ * но разнос по книгам для них не запускает.
+ *
  * v1.0.0 — 22.09.2026
  * WB ЗАКРЫЛ ВИТРИНУ АНТИБОТОМ — полки и цены брендов с 22.09 собираются в Chrome
  * менеджера, по кнопке в книге. Хаб — почтовый ящик между облаком и браузером.
@@ -169,7 +173,7 @@ function doPost(e) {
       var who = rec.who || '';
       put_(SHEET_RESULTS, contour, who, body);
       state_().deleteProperty('run:' + contour);
-      var code = dispatch_(contour, who);
+      var code = contour.indexOf('diag') === 0 ? 204 : dispatch_(contour, who);
       var n = rec.shelves ? Object.keys(rec.shelves).length : 0;
       var c = rec.cards ? Object.keys(rec.cards).length : 0;
       log_(contour, 'итог получен', who, 'полок ' + n + ', карточек ' + c +

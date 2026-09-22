@@ -1,5 +1,13 @@
-/* ПОЛКИ WB — СБОР ИЗ БРАУЗЕРА v1.0.1 — 22.09.2026 */
+/* ПОЛКИ WB — СБОР ИЗ БРАУЗЕРА v1.1.0 — 22.09.2026 */
 /*
+ * v1.1.0 — 22.09.2026
+ * АНОНИМНАЯ ПОЛКА НЕ СХОДИТСЯ С ИСТОРИЕЙ — первый боевой сбор: у 43 % полок пустой ответ
+ * при живой карточке, позиции далеко от вчерашних. Режим диагностики
+ * (#wbshelf-diag=diag): на полках из плана «diag» снимает рядом анонимную полку
+ * (/__internal/u-recom) и полку «среднего вошедшего покупателя» (/__internal/recom,
+ * токен покупателя из wbx__tokenData, без истории просмотров — так по умолчанию
+ * делает «ТурбоМинимум»). Итог — в хаб, книги не трогаются.
+ *
  * v1.0.1 — 22.09.2026
  * ПАНЕЛЬ МЕЛЬКНУЛА И ПРОПАЛА, СБОР НЕ НАЧАЛСЯ — первый запуск у владельца. WB сначала
  * отдаёт страницу проверки браузера и после неё сам перезагружает вкладку: расширение
@@ -25,7 +33,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '1.0.1';
+  const VERSION = '1.1.0';
   const KEY_PENDING = 'wbshelf.pending';
   const PENDING_MS = 10 * 60 * 1000;
   const KEY_JOB = 'wbshelf.job';
@@ -239,7 +247,78 @@
   const siteReady = () => !!localStorage.getItem('wbx__sessionID') &&
     !document.querySelector('script[src*="__wbaas/challenges"]');
 
+  // ------------------------------------------------------------ диагностика
+  /** Токен вошедшего покупателя сайта и его id (из JWT). Нет входа — null. */
+  function buyer() {
+    try {
+      const raw = JSON.parse(localStorage.getItem('wbx__tokenData') || 'null');
+      const token = raw && (raw.token || raw.accessToken);
+      if (!token) return null;
+      const body = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      const payload = JSON.parse(atob(body + '='.repeat((4 - body.length % 4) % 4)));
+      return {token, user: String(payload.user || '')};
+    } catch (e) { return null; }
+  }
+
+  async function listShelf(path, comp, dest, extra, pages) {
+    const ids = [];
+    let total = null, status = 'ok';
+    for (let page = 1; page <= pages; page++) {
+      const url = path + '?' + new URLSearchParams({ab_testing: 'false', curr: 'rub',
+        resultset: 'catalog', spp: '30', suppressSpellcheck: 'false', appType: '1',
+        query: String(comp), page: String(page), dest: String(dest)}).toString();
+      const r = await fetch(url, {credentials: 'include', headers: {...headers(), ...extra}});
+      if (r.status === 403 || r.status === 498) return {s: 'blocked:' + r.status, ids};
+      if (!r.ok) return {s: 'http:' + r.status, t: total, ids};
+      const text = await r.text();
+      if (!text.trim()) { status = page === 1 ? 'empty' : 'ok'; break; }
+      const j = JSON.parse(text);
+      if (total === null) total = j.total;
+      const pr = j.products || [];
+      pr.forEach(p => ids.push(p.id));
+      if (!pr.length || (total && ids.length >= total)) break;
+      await sleep(PAUSE_MS);
+    }
+    return {s: status, t: total, ids};
+  }
+
+  async function runDiag(contour) {
+    ui();
+    say('Диагностика полок: беру список…');
+    const ans = await hub('get_plan', contour);
+    if (!ans || !ans.ok) { say('Нет плана диагностики: ' + (ans && ans.error), '#ff9b9b'); return; }
+    const plan = ans.plan, b = buyer();
+    set('title', `Диагностика: анонимно против «вошедший покупатель»${b ? '' : ' — ВХОДА НЕТ'}`);
+    const out = {v: VERSION, contour, who: await store.get(KEY_WHO) || '', buyer: !!b,
+                 at: new Date().toISOString(), shelves: {}};
+    const comps = Object.keys(plan.shelves);
+    let n = 0;
+    for (const comp of comps) {
+      const a = await listShelf('/__internal/u-recom/recom/ru/common/v8/search', comp, plan.dest, {}, 3);
+      await sleep(PAUSE_MS);
+      const u = b ? await listShelf('/__internal/recom/recom/ru/common/v8/search', comp, plan.dest,
+        {Authorization: 'Bearer ' + b.token, 'x-userid': b.user}, 3) : {s: 'no-login', ids: []};
+      out.shelves[comp] = {a, u};
+      set('shelves', `Полки: ${++n} из ${comps.length}`);
+      await sleep(PAUSE_MS);
+    }
+    say('Отправляю итог диагностики…');
+    const res = await hub('result', contour, out);
+    say(res && res.ok ? 'Диагностика готова, книги не менялись. Вкладку можно закрыть.'
+                      : 'Хаб не принял итог: ' + (res && res.error), res && res.ok ? '#8fe39a' : '#ff9b9b');
+    lines.stop.style.display = 'none';
+  }
+
   async function main() {
+    const dm = location.hash.match(/wbshelf-diag=([\w-]+)/);
+    if (dm) {
+      // Метку не стираем до конца: страница проверки WB перезагрузит вкладку.
+      ui();
+      for (let i = 0; i < 120 && !siteReady(); i++) { say('Жду, пока WB проверит браузер…', '#ffd479'); await sleep(1000); }
+      await runDiag(dm[1]);
+      history.replaceState(null, '', location.pathname + location.search);
+      return;
+    }
     const hm = location.hash.match(/wbshelf=([\w-]+)/);
     if (hm) await store.set(KEY_PENDING, {contour: hm[1], ts: Date.now()});
     const pending = await store.get(KEY_PENDING);
