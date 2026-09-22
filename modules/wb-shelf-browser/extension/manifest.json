@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Полки WB — сбор для книг ГАНЗЫ",
+  "version": "1.0.0",
+  "description": "Снимает позиции наших карточек в полках конкурентов и цены на wildberries.ru по кнопке из книги и отдаёт их в книги брендов.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://www.wildberries.ru/*",
+    "https://script.google.com/*",
+    "https://script.googleusercontent.com/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.wildberries.ru/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": { "128": "icon128.png" }
+}

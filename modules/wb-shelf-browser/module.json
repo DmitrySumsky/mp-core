@@ -1,0 +1,22 @@
+{
+  "name": "wb-shelf-browser",
+  "kind": "chrome-extension + gas-webapp",
+  "version": "1.0.0",
+  "standard": "pult@1.0.0",
+  "extension": "extension/",
+  "hub": "hub/Code.gs",
+  "manifest": "hub/appsscript.json",
+  "build": "python modules/wb-shelf-browser/tools/build_ext.py --keys <файл ключей>",
+  "deploy": "python modules/wb-shelf-browser/tools/deploy_hub.py --keys <файл ключей>",
+  "consumer": "DmitrySumsky/wb-shelf-positions: browser_job.py, browser-apply.yml, кнопка apps_script/browser_button.gs",
+  "deviations": [
+    {
+      "rule": "§1 тонкий лоадер + центральный файл",
+      "reason": "это не автоматизация книги: сбор идёт в расширении Chrome (иначе WB не пускает), а хаб — веб-приложение без книги-пульта. Кнопка в книгах брендов живёт в их старом скрипте (wb-shelf-positions/apps_script) до переезда модуля полок в mp-core."
+    },
+    {
+      "rule": "§2 красная кнопка",
+      "reason": "во внешние системы ничего не пишется: расширение только читает WB, итог уходит в свои же книги."
+    }
+  ]
+}
