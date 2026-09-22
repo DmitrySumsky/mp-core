@@ -1,9 +1,9 @@
-/* ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — МОДЕЛЬ — см. историю версий в «1_меню.js»
+/* МОДЕЛЬ — вся логика расчёта.
  *
- * Здесь вся логика расчёта: из каких заказов берутся коэффициенты и как из них получается
- * прибыль заказов дня. Файл не ходит ни в Маркет, ни в таблицу — только считает.
+ * Из каких заказов берутся коэффициенты, как из них получается прибыль заказов дня, как считается
+ * факт дня и экономика одной штуки для юнитки. Файл не ходит ни в Маркет, ни в таблицу — только считает.
  *
- * Кэш кабинета (его собирает «2_сбор.js», хранит «5_кэш.js»):
+ * Кэш кабинета (его собирает «03_сбор.js», хранит «02_настройки.js»):
  *   orders  { номер заказа: { d: дата заказа, st: статус, it: [[артикул, шт, цена, ставка буста, доставлено шт]] } }
  *   svc     { "заказ|артикул": { статья: ₽ } }  — факт удержаний Маркета по заказу (отчёт «Стоимость услуг»);
  *           «заказ|» без артикула — удержания на весь заказ, делятся по штукам
@@ -17,18 +17,15 @@ var YOP = {
   TARIFF_DAYS: 14,                 // дней назад: окно действующего тарифа комиссии
   MIN_UNITS: 30,                   // у артикула меньше штук в когорте — берутся коэффициенты кабинета
   DEFAULT_TARIFF: 49,
-  TAX: 0.25                        // налог, как в юнитке: минус 25 % от маржи
+  TAX: 0.25,                       // налог, как в юнитке: минус 25 % от маржи
+  FACT_AGE: 14,                    // с какого возраста дня (дней назад) в «по дням» пишется факт
+  UNIT_DAYS: 30,                   // юнитка: окно продаж и рекламы за показы
+  UNIT_PRICE_DAYS: 7               // юнитка: окно фактической цены продажи и ставки буста
 };
 var YOP_ORDER_COSTS = ['комиссия', 'буст', 'доставка', 'миля', 'перевод', 'эквайринг', 'возврат', 'прочее'];
 var YOP_COSTS = YOP_ORDER_COSTS.concat(['себес']);
 var YOP_DAY_COSTS = ['показы', 'хранение', 'подписка', 'прочее'];
 var YOP_TRANSIT = { PROCESSING: 1, DELIVERY: 1, PICKUP: 1, RESERVED: 1, UNPAID: 1, PENDING: 1 };
-
-function yopAddDays_(iso, k) {
-  var d = new Date(iso + 'T12:00:00Z');
-  d.setUTCDate(d.getUTCDate() + k);
-  return d.toISOString().slice(0, 10);
-}
 
 /** Позиции заказов кэша плоским списком + штук в каждом заказе (для деления удержаний «на заказ»). */
 function yopItems_(cache) {
@@ -97,15 +94,15 @@ function yopTariffs_(cache, day) {
  *   миля      = ₽ на доставленную штуку по свежим заказам 8–21 день
  *   эквайринг, возврат, прочее — ₽ на заказанную штуку
  */
-function yopCoefficients_(cache, flat, day) {
+function yopCoefficients_(cache, flat, day, manual) {
   var agg = yopAgg_(cache, flat, yopAddDays_(day, -YOP.COHORT_FROM), yopAddDays_(day, -YOP.COHORT_TO));
   var mile = yopAgg_(cache, flat, yopAddDays_(day, -YOP.MILE_FROM), yopAddDays_(day, -YOP.MILE_TO));
-  var tr = yopTariffs_(cache, day), out = {};
+  var tr = yopTariffs_(cache, day), out = {}, over = yopManualTariff_(manual, day);
   Object.keys(agg).forEach(function (key) {
     var a = agg[key], m = mile[key];
     if (!m || m.deliv < YOP.MIN_UNITS) m = mile['*'] || {};
     var known = Math.max(a.n - a.transit, 1), g = a.gmv || 1;
-    var t = key === '*' ? tr.cab : (tr.sku[key] != null ? tr.sku[key] : tr.cab);
+    var t = over != null ? over : key === '*' ? tr.cab : (tr.sku[key] != null ? tr.sku[key] : tr.cab);
     out[key] = {
       когорта_шт: a.n, когорта_доставлено: a.deliv,
       выкуп: a.deliv / known,
@@ -119,7 +116,7 @@ function yopCoefficients_(cache, flat, day) {
       прочее: a.n ? (a['прочее'] || 0) / a.n : 0
     };
   });
-  if (!out['*']) out['*'] = { когорта_шт: 0, когорта_доставлено: 0, выкуп: 0.85, тариф: tr.cab / 100, буст_k: 1,
+  if (!out['*']) out['*'] = { когорта_шт: 0, когорта_доставлено: 0, выкуп: 0.85, тариф: (over != null ? over : tr.cab) / 100, буст_k: 1,
     доставка: 0.05, перевод: 0.016, миля: 0, эквайринг: 0.12, возврат: 0, прочее: 0 };
   return out;
 }
@@ -155,10 +152,10 @@ function yopPredict_(row, c, cogs) {
   return cost;
 }
 
-/** Заказы дня по артикулам с прогнозом. cogs — { артикул: себес } из юнитки. */
-function yopForecast_(cache, day, cogs, flat) {
+/** Заказы дня по артикулам с прогнозом. cogs — { артикул: себес }, manual — тариф вручную с листа настроек. */
+function yopForecast_(cache, day, cogs, flat, manual) {
   flat = flat || yopItems_(cache);
-  var coef = yopCoefficients_(cache, flat, day), acc = {};
+  var coef = yopCoefficients_(cache, flat, day, manual), acc = {};
   flat.items.forEach(function (it) {
     if (it.day !== day) return;
     var a = acc[it.sku] || (acc[it.sku] = { n: 0, gmv: 0, bidgmv: 0 });
@@ -176,6 +173,87 @@ function yopForecast_(cache, day, cogs, flat) {
   return { rows: rows, coef: coef };
 }
 
-if (typeof module !== 'undefined') {
-  module.exports = { YOP: YOP, yopForecast_: yopForecast_, yopItems_: yopItems_, yopAddDays_: yopAddDays_ };
+/** v2.0.0. Тариф вручную с листа настроек, % — если он задан и действует для дня `day`; иначе null. */
+function yopManualTariff_(manual, day) {
+  if (!manual || manual.tariff == null) return null;
+  if (manual.tariffFrom && day < manual.tariffFrom) return null;
+  return manual.tariff;
+}
+
+/**
+ * v2.0.0. ФАКТ заказов дня `day`: что Маркет по ним реально удержал (отчёт «Стоимость услуг»)
+ * и сколько штук реально выкуплено. Сравнивается с прогнозом «ЧП заказов дня» — та же база:
+ * до рекламы за показы, хранения, подписки и налога.
+ *   выручка = цена продавца × выкупленные штуки; себес — на выкупленные штуки;
+ *   известно = доля штук, у заказов которых судьба уже известна (не в пути).
+ */
+function yopFactDay_(cache, flat, day, cogs) {
+  var r = { n: 0, known: 0, deliv: 0, выручка: 0, себес: 0, удержания: 0 };
+  flat.items.forEach(function (it) {
+    if (it.day !== day) return;
+    var f = yopFact_(cache, it, flat.units);
+    r.n += it.n;
+    if (!it.transit) r.known += it.n;
+    r.deliv += it.deliv;
+    r.выручка += it.price * it.deliv;
+    r.себес += it.deliv * (cogs[it.sku] || 0);
+    YOP_ORDER_COSTS.forEach(function (k) { r.удержания += f[k] || 0; });
+  });
+  r.ЧП = r.выручка - r.удержания - r.себес;
+  r.известно = r.n ? r.known / r.n : 0;
+  return r;
+}
+
+/**
+ * v2.0.0. Юнитка: экономика одной ВЫКУПЛЕННОЙ штуки по каждому артикулу с заказами за 30 дней
+ * или с остатком на складах. Коэффициенты — те же, что у прогноза заказов дня `day` (факт удержаний
+ * по дозревшим заказам); цена и ставка буста — факт заказов за 7 дней, нет заказов — цена в кабинете.
+ * Реклама за показы делится условно: доля от суммы заказов кабинета за 30 дней.
+ */
+function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
+  var coef = yopCoefficients_(cache, flat, day, manual);
+  var lo30 = yopAddDays_(day, -YOP.UNIT_DAYS + 1), lo7 = yopAddDays_(day, -YOP.UNIT_PRICE_DAYS + 1);
+  var acc = {}, gmv30 = 0, shows = 0;
+  flat.items.forEach(function (it) {
+    if (it.day < lo30 || it.day > day) return;
+    var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0 });
+    a.n30 += it.n;
+    gmv30 += it.price * it.n;
+    if (it.day >= lo7) { a.n7 += it.n; a.gmv7 += it.price * it.n; a.bidgmv7 += it.price * it.n * it.bid; }
+  });
+  Object.keys(cache.dayCost).forEach(function (d) {
+    if (d >= lo30 && d <= day) shows += cache.dayCost[d]['показы'] || 0;
+  });
+  var drr = gmv30 ? shows / gmv30 : 0;
+  var offers = (unitData && unitData.offers) || {}, st = (unitData && unitData.stocks) || { fby: {}, fbs: {} };
+  var skus = {};
+  Object.keys(acc).forEach(function (s) { skus[s] = 1; });
+  Object.keys(st.fby || {}).concat(Object.keys(st.fbs || {})).forEach(function (s) { skus[s] = 1; });
+  var rows = Object.keys(skus).map(function (s) {
+    var a = acc[s] || { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0 }, o = offers[s] || {}, p = yopPick_(coef, s);
+    var price7 = a.n7 ? a.gmv7 / a.n7 : null;
+    return {
+      sku: s, name: o.name || '', status: [o.fbyStatus ? 'FBY: ' + o.fbyStatus : '', o.fbsStatus ? 'FBS: ' + o.fbsStatus : '']
+        .filter(String).join(', '),
+      priceCab: o.price || null, price7: price7, price: price7 || o.price || 0,
+      n30: a.n30, fby: (st.fby || {})[s] || 0, fbs: (st.fbs || {})[s] || 0,
+      bid: a.gmv7 ? a.bidgmv7 / a.gmv7 : 0, drr: drr,
+      coef: p.c, src: p.src, cogs: cogs.hasOwnProperty(s) ? cogs[s] : null
+    };
+  });
+  rows.sort(function (x, y) { return y.n30 - x.n30 || y.fby + y.fbs - x.fby - x.fbs; });
+  return { rows: rows, drr: drr, shows: shows, gmv30: gmv30 };
+}
+
+/** v2.0.0. Экономика штуки той же формулой, что стоит в ячейках юнитки (для тестов и сверки). */
+function yopUnitCalc_(x) {
+  var c = x.coef, P = x.price, b = c.выкуп || 1, cg = x.cogs || 0;
+  var m = {
+    комиссия: P * c.тариф, буст: P * x.bid * c.буст_k / b, доставка: P * c.доставка / b, миля: c.миля,
+    перевод: P * c.перевод / b, эквайринг: c.эквайринг / b, возврат: c.возврат / b, прочее: c.прочее / b
+  };
+  var mp = 0;
+  Object.keys(m).forEach(function (k) { mp += m[k]; });
+  var before = P - mp - cg, shows = P * x.drr / b, margin = before - shows, tax = margin * YOP.TAX;
+  return { расходы: mp, доПоказов: before, показы: shows, маржа: margin, налог: tax, ЧП: margin - tax };
 }

@@ -1,32 +1,43 @@
 {
   "name": "ym-order-profit",
   "kind": "gas",
-  "version": "1.0.0",
-  "purpose": "ЧП по заказам Яндекс Маркета: прибыль вчерашних заказов прогнозом по истории своих заказов (выкуп по дозревшим когортам, факт удержаний из отчёта «Стоимость услуг»)",
+  "version": "2.0.0",
+  "purpose": "ЧП по заказам Яндекс Маркета: прибыль вчерашних заказов прогнозом по истории своих заказов (выкуп по дозревшим когортам, факт удержаний из отчёта «Стоимость услуг»), факт рядом с прогнозом, юнитка на данных Маркета",
+  "standard": "pult@1.0.0",
+  "central": "central/build/central.js",
+  "central_sources": ["central/preamble.js", "central/src/*.js"],
+  "loader": "loader/loader.gs",
+  "manifest": "loader/appsscript.json",
+  "books_registry": "идентификаторы книг, проекта скрипта, кабинеты и путь к ключу сервисного аккаунта в открытом репозитории не хранятся: --registry указывает на локальный файл вне репозитория",
+  "tests": "node modules/ym-order-profit/tests/run.js && python modules/ym-order-profit/tests/test_engine.py",
+  "build": "python modules/ym-order-profit/tools/build.py",
+  "deploy": "python modules/ym-order-profit/tools/deploy.py --registry <реестр>",
   "tools": {
     "pull": "python modules/ym-order-profit/tools/pull.py --registry <реестр> --from <дата> --to <дата>",
-    "write": "python modules/ym-order-profit/tools/write_book.py --registry <реестр> --day <вчера>"
+    "seed_cache": "python modules/ym-order-profit/tools/seed_cache.py --registry <реестр> --out <папка>",
+    "seed_book": "python modules/ym-order-profit/tools/seed_book.py --registry <реестр> [--cogs-xlsx <кабинет>=<файл>] [--add-cabinet <кабинет>] [--hide <лист>]",
+    "real_data": "node modules/ym-order-profit/tests/real_data.js <реестр> <день>"
   },
-  "tests": "python modules/ym-order-profit/tests/test_engine.py && node modules/ym-order-profit/tests/run_gas_stub.js <реестр> <день>",
-  "books_registry": "идентификаторы книг, кабинеты и путь к ключу сервисного аккаунта в открытом репозитории не хранятся: --registry указывает на локальный файл вне репозитория",
-  "standard": "pult@1.0.0",
   "deviations": [
     {
-      "rule": "§1 тонкий лоадер + центральный код одним файлом из репозитория",
-      "reason": "v1.0.0: весь код лежит в отдельном привязанном проекте книги (не в её собственном скрипте) пятью файлами — менеджеры ЯМ прямо попросили читать формулы расчёта в Apps Script. Источник правды — gas/ в этом репозитории, заливка — tools/deploy_gas.py (PUT всего состава с обратной сверкой). Переход на лоадер — когда модуль уйдёт на боевую книгу."
+      "rule": "§1 токен репозитория на служебном листе",
+      "reason": "токен не нужен, пока mp-core открыт: лоадер тянет код по публичной ссылке, с токеном в Script Properties (GITHUB_TOKEN) — через API. Листа «Ключи» в книге нет: ключи Маркета уже живут на листе «API-ключи» книги, второй лист ключей завёл бы две правды."
+    },
+    {
+      "rule": "§1 лоадер в скрипте книги",
+      "reason": "лоадер — в отдельном привязанном проекте книги, а не в её собственном скрипте: у книги свой большой скрипт со своим onOpen, два onOpen в одном проекте молча затирают друг друга."
     },
     {
       "rule": "§2 красная кнопка, §3 диалог записи",
       "reason": "модуль ничего не пишет в Маркет — только читает API и заполняет свои листы книги; 🔴 в меню нет."
     },
     {
+      "rule": "§7 вахтёр",
+      "reason": "отдельного триггера-вахтёра нет: его роль играет ежедневный автопрогон (подхватывает прогон, молчащий дольше 30 минут) и пункт «🧹 Сбросить зависший прогон». Минутный вахтёр съедал бы суточную квоту триггеров ради прогона раз в день."
+    },
+    {
       "rule": "история в ячейках книги",
       "reason": "история заказов и удержаний за 6 недель (десятки тысяч заказов у крупного кабинета) лежит JSON-файлами на Диске рядом с книгой: книга и так около 8 млн ячеек из 10."
     }
-  ],
-  "gas": {
-    "files": "gas/*.js + gas/appsscript.json",
-    "deploy": "python modules/ym-order-profit/tools/deploy_gas.py --registry <реестр>",
-    "seed": "python modules/ym-order-profit/tools/seed_cache.py --registry <реестр> --out <папка>"
-  }
+  ]
 }
