@@ -1,4 +1,4 @@
-/* ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — ЦЕНТРАЛЬНЫЙ КОД v2.0.0 — 22.09.2026 */
+/* ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — ЦЕНТРАЛЬНЫЙ КОД v2.0.1 — 22.09.2026 */
 /*
  * Что делает: каждое утро считает, сколько в итоге принесут заказы ВЧЕРАШНЕГО дня по каждому
  * кабинету Маркета, ведёт историю по дням с фактом рядом с прогнозом и собирает юнитку на данных
@@ -14,6 +14,14 @@
  *   07_пульт.js     — «Как работать», «Что сейчас происходит», «Проверка связи», миграция листов
  *
  * ИСТОРИЯ ВЕРСИЙ (новая сверху)
+ *
+ * v2.0.1 — 22.09.2026
+ *   #ERROR! ВО ВСЕХ ФОРМУЛАХ С АРГУМЕНТАМИ — первый живой прогон в копии книги, 22.09.2026.
+ *   Формулы пишутся через setValues, а это ввод «как человек»: в русской локали книги разделитель
+ *   аргументов «;», и SUMIFS/IFERROR/IF с «,» падали с «Formula parse error». Простые (=C5*D5) считались.
+ *   • yopFx_: перед записью «,» в формулах меняется на разделитель локали книги (вне кавычек и имён листов);
+ *   • лист «по дням» с ячейками-ошибками не замораживается значениями, а собирается заново из кэша.
+ *   Тесты: 20/20.
  *
  * v2.0.0 — 22.09.2026
  *   ДОГОВОРЁННОСТИ С МЕНЕДЖЕРАМИ ЯМ ИЗ ЧАТА 21–22.09 — В КОД; ЮНИТКА НА ДАННЫХ МАРКЕТА; ПЕРЕЕЗД НА ПУЛЬТ.
@@ -60,7 +68,7 @@
 
 /* ЯДРО: имена листов, даты, журнал событий. */
 
-var YOP_VERSION = 'v2.0.0';
+var YOP_VERSION = 'v2.0.1';
 var YOP_TIME_LIMIT_MS = 4.5 * 60 * 1000;   // этап очереди: дальше — продолжение новым запуском
 var YOP_START_LIMIT_MS = 2.5 * 60 * 1000;  // новый кусок сбора начинается, только если прошло меньше
 var YOP_STALE_MS = 30 * 60 * 1000;         // очередь молчит дольше — считается зависшей
@@ -129,6 +137,37 @@ function yopHeader_(sh, head, widths) {
 function yopTitle_(sh, title, note) {
   sh.getRange(1, 1).setValue(title).setFontWeight('bold').setFontSize(13);
   sh.getRange(2, 1).setValue(note).setFontStyle('italic');
+}
+/**
+ * v2.0.1. Формулы пишутся через setValues как ввод человека — значит, по правилам локали книги: в русской
+ * локали аргументы разделяются «;», а «,» даёт «Formula parse error» (#ERROR!). В коде формулы пишутся
+ * с «,», здесь меняются на разделитель книги — вне кавычек и имён листов.
+ */
+var YOP_SEP_ = null;
+function yopSep_() {
+  if (YOP_SEP_ === null) {
+    var loc = '';
+    try { loc = String(SpreadsheetApp.getActive().getSpreadsheetLocale() || ''); } catch (e) {}
+    YOP_SEP_ = !loc || /^en/i.test(loc) ? ',' : ';';
+  }
+  return YOP_SEP_;
+}
+
+function yopFx_(rows) {
+  if (yopSep_() === ',') return rows;
+  return rows.map(function (row) {
+    return row.map(function (v) {
+      if (typeof v !== 'string' || v.charAt(0) !== '=') return v;
+      var out = '', q = '';
+      for (var i = 0; i < v.length; i++) {
+        var ch = v.charAt(i);
+        if (q) { if (ch === q) q = ''; out += ch; continue; }
+        if (ch === '"' || ch === "'") { q = ch; out += ch; continue; }
+        out += ch === ',' ? ';' : ch;
+      }
+      return out;
+    });
+  });
 }
 
 
@@ -875,7 +914,7 @@ function yopWriteDetail_(day, all) {
   if (rows.length) {
     var n = rows.length, R = YOP_HEAD_ROW + 1;
     sh.getRange(R, 2, n, 1).setNumberFormat('@');                // артикул — текстом ДО записи: артикул из одних цифр не станет числом
-    sh.getRange(R, 1, n, rows[0].length).setValues(rows);
+    sh.getRange(R, 1, n, rows[0].length).setValues(yopFx_(rows));
     sh.getRange(R, 4, n, 2).setNumberFormat('#,##0');
     sh.getRange(R, 6, n, 6).setNumberFormat('0.0%');
     sh.getRange(R, 12, n, 5).setNumberFormat('#,##0.00');
@@ -931,7 +970,11 @@ function yopDayBlock_(day, all, firstRow, live, detailLast) {
 }
 
 function yopDaysLayoutOk_(sh) {
-  return !!sh && String(sh.getRange(YOP_HEAD_ROW, YOP_DAYS_FACT_COL).getValue()).indexOf('Факт: ЧП') === 0;
+  if (!sh || String(sh.getRange(YOP_HEAD_ROW, YOP_DAYS_FACT_COL).getValue()).indexOf('Факт: ЧП') !== 0) return false;
+  var n = sh.getLastRow() - YOP_HEAD_ROW;                         // v2.0.1: ячейки с ошибкой формулы не замораживаются
+  if (n < 1) return true;                                        // значениями — такой лист собирается заново
+  return !sh.getRange(YOP_HEAD_ROW + 1, 3, n, YOP_DAYS_HEAD.length - 2).getDisplayValues()
+    .some(function (r) { return r.some(function (x) { return String(x).charAt(0) === '#'; }); });
 }
 
 function yopDaysSheet_() {
@@ -963,7 +1006,7 @@ function yopFreezeAndDrop_(sh, day) {
 function yopInsertBlock_(sh, block) {
   sh.insertRowsBefore(YOP_HEAD_ROW + 1, block.length + 1);
   sh.getRange(YOP_HEAD_ROW + 1, 1, block.length + 1, YOP_DAYS_HEAD.length).clearFormat();
-  sh.getRange(YOP_HEAD_ROW + 1, 1, block.length, block[0].length).setValues(block);
+  sh.getRange(YOP_HEAD_ROW + 1, 1, block.length, block[0].length).setValues(yopFx_(block));
   yopDaysFormat_(sh, YOP_HEAD_ROW + 1, block.length);
 }
 
@@ -1062,7 +1105,7 @@ function yopWriteUnit_(day, all) {
   if (rows.length) {
     var n = rows.length, R = YOP_HEAD_ROW + 1;
     sh.getRange(R, 2, n, 1).setNumberFormat('@');
-    sh.getRange(R, 1, n, rows[0].length).setValues(rows);
+    sh.getRange(R, 1, n, rows[0].length).setValues(yopFx_(rows));
     sh.getRange(R, 5, n, 3).setNumberFormat('#,##0');
     sh.getRange(R, 8, n, 5).setNumberFormat('#,##0');
     sh.getRange(R, 9, n, 1).setNumberFormat('#,##0.0');
@@ -1614,6 +1657,7 @@ if (typeof module !== 'undefined' && module.exports) {
     yopRunYesterday: yopRunYesterday, yopRefreshUnit: yopRefreshUnit, yopDailyTrigger: yopDailyTrigger, continueQueue: continueQueue,
     yopRecalcSheets: yopRecalcSheets, yopRebuildHistory: yopRebuildHistory, yopResetRun: yopResetRun,
     yopTriggerOn: yopTriggerOn, yopTriggerOff: yopTriggerOff,
+    yopFx_: yopFx_, yopSepReset_: function () { YOP_SEP_ = null; },
     yopHelp: yopHelp, yopStatus: yopStatus, yopCheckConnection: yopCheckConnection, upgradeSheets: upgradeSheets
   };
 }

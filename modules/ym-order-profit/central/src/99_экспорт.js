@@ -11,6 +11,7 @@ if (typeof module !== 'undefined' && module.exports) {
     yopRunYesterday: yopRunYesterday, yopRefreshUnit: yopRefreshUnit, yopDailyTrigger: yopDailyTrigger, continueQueue: continueQueue,
     yopRecalcSheets: yopRecalcSheets, yopRebuildHistory: yopRebuildHistory, yopResetRun: yopResetRun,
     yopTriggerOn: yopTriggerOn, yopTriggerOff: yopTriggerOff,
+    yopFx_: yopFx_, yopSepReset_: function () { YOP_SEP_ = null; },
     yopHelp: yopHelp, yopStatus: yopStatus, yopCheckConnection: yopCheckConnection, upgradeSheets: upgradeSheets
   };
 }

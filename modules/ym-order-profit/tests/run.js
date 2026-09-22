@@ -241,6 +241,18 @@ t('⏰ автопрогон: триггер ставится один раз и 
   eq(env.triggers.filter(x => x.handler === 'yopDailyTrigger').length, 0);
 });
 
+t('русская локаль: «,» в формулах → «;», кроме кавычек и имён листов; сломанный лист «по дням» пересобирается', () => {
+  env.ss.getSpreadsheetLocale = () => 'ru_RU'; C.yopSepReset_();
+  const r = C.yopFx_([["=IF(COUNTIFS('a,b'!$A:$A,$A5)>0,\"x,y\",ROUND(1.5,0))", 'a,b', 3]]);
+  eq(r[0][0], "=IF(COUNTIFS('a,b'!$A:$A;$A5)>0;\"x,y\";ROUND(1.5;0))"); eq(r[0][1], 'a,b');
+  const s = env.ss.getSheetByName(C.YOP_SH.days);
+  s.set(20, 23, '#ERROR!');
+  C.yopRecalcSheets();
+  ok(!s.rows.some(x => x.some(v => String(v).charAt(0) === '#')), 'ошибок на листе не осталось');
+  ok(String(s.get(5, 3)).indexOf(';') > 0, 'формулы вчера — с «;»');
+  delete env.ss.getSpreadsheetLocale; C.yopSepReset_();
+});
+
 console.log('пульт');
 
 t('📊 статус: одно действие — ключ для кабинета без ключа', () => {

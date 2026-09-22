@@ -65,7 +65,7 @@ function yopWriteDetail_(day, all) {
   if (rows.length) {
     var n = rows.length, R = YOP_HEAD_ROW + 1;
     sh.getRange(R, 2, n, 1).setNumberFormat('@');                // артикул — текстом ДО записи: артикул из одних цифр не станет числом
-    sh.getRange(R, 1, n, rows[0].length).setValues(rows);
+    sh.getRange(R, 1, n, rows[0].length).setValues(yopFx_(rows));
     sh.getRange(R, 4, n, 2).setNumberFormat('#,##0');
     sh.getRange(R, 6, n, 6).setNumberFormat('0.0%');
     sh.getRange(R, 12, n, 5).setNumberFormat('#,##0.00');
@@ -121,7 +121,11 @@ function yopDayBlock_(day, all, firstRow, live, detailLast) {
 }
 
 function yopDaysLayoutOk_(sh) {
-  return !!sh && String(sh.getRange(YOP_HEAD_ROW, YOP_DAYS_FACT_COL).getValue()).indexOf('Факт: ЧП') === 0;
+  if (!sh || String(sh.getRange(YOP_HEAD_ROW, YOP_DAYS_FACT_COL).getValue()).indexOf('Факт: ЧП') !== 0) return false;
+  var n = sh.getLastRow() - YOP_HEAD_ROW;                         // v2.0.1: ячейки с ошибкой формулы не замораживаются
+  if (n < 1) return true;                                        // значениями — такой лист собирается заново
+  return !sh.getRange(YOP_HEAD_ROW + 1, 3, n, YOP_DAYS_HEAD.length - 2).getDisplayValues()
+    .some(function (r) { return r.some(function (x) { return String(x).charAt(0) === '#'; }); });
 }
 
 function yopDaysSheet_() {
@@ -153,7 +157,7 @@ function yopFreezeAndDrop_(sh, day) {
 function yopInsertBlock_(sh, block) {
   sh.insertRowsBefore(YOP_HEAD_ROW + 1, block.length + 1);
   sh.getRange(YOP_HEAD_ROW + 1, 1, block.length + 1, YOP_DAYS_HEAD.length).clearFormat();
-  sh.getRange(YOP_HEAD_ROW + 1, 1, block.length, block[0].length).setValues(block);
+  sh.getRange(YOP_HEAD_ROW + 1, 1, block.length, block[0].length).setValues(yopFx_(block));
   yopDaysFormat_(sh, YOP_HEAD_ROW + 1, block.length);
 }
 
@@ -252,7 +256,7 @@ function yopWriteUnit_(day, all) {
   if (rows.length) {
     var n = rows.length, R = YOP_HEAD_ROW + 1;
     sh.getRange(R, 2, n, 1).setNumberFormat('@');
-    sh.getRange(R, 1, n, rows[0].length).setValues(rows);
+    sh.getRange(R, 1, n, rows[0].length).setValues(yopFx_(rows));
     sh.getRange(R, 5, n, 3).setNumberFormat('#,##0');
     sh.getRange(R, 8, n, 5).setNumberFormat('#,##0');
     sh.getRange(R, 9, n, 1).setNumberFormat('#,##0.0');
