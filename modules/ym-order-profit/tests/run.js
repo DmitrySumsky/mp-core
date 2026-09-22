@@ -34,6 +34,9 @@ const SVC = {
   'placement.json': delivered.map(id => ({ orderId: id, shopSku: skuOf(id), amountWithoutBonuses: 490, tariff: 49,
     orderCreationDateTime: add(D, -5) + 'T10:00:00', serviceDate: MID })),
   'boost.json': delivered.map(id => ({ orderId: id, shopSku: skuOf(id), prepaid: null, postpaid: 180, bonusPaid: null, serviceDate: MID })),
+  // средняя миля: тариф 92, из них 91 закрыто взаимозачётом — в servicePrice остаётся 1 ₽
+  'crossregional_delivery.json': delivered.filter(id => id <= 40).map(id => ({ orderId: id, shopSku: 'A', servicePrice: 1, netting: 91,
+    tariff: 92, serviceDate: MID })),
   'cpm-boost.json': [{ payment: 3000, serviceDate: D }],
   'paid_storage_fby.json': [{ paidStorage: 150, serviceDate: D }]
 };
@@ -67,7 +70,8 @@ t('тариф вручную действует с даты заказа, до �
 t('факт дня: выкупленные × цена − удержания Маркета − себес выкупленных', () => {
   const f = C.yopFactDay_(cache, flat, OLD, { A: 100 });
   eq(f.n, 40); eq(f.deliv, 36); near(f.известно, 1, 'известно');
-  near(f.ЧП, 36 * 1000 - 36 * (490 + 180) - 36 * 100, 'ЧП');
+  near(f.ЧП, 36 * 1000 - 36 * (490 + 180 + 92) - 36 * 100, 'ЧП');
+  eq(cache.svc['1|A']['миля'], 92, 'средняя миля = servicePrice + netting (взаимозачёт)');
   near(C.yopFactDay_(cache, flat, D, {}).известно, 0, 'заказы вчера ещё в пути');
 });
 

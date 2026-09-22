@@ -114,6 +114,7 @@ function yopAddServices_(cache, files) {
       if (YOP_ORDER_RULES[name] || (r.orderId && !YOP_DAY_RULES[name])) {
         rule = YOP_ORDER_RULES[name] || ['прочее', 'servicePrice'];
         val = rule[0] === 'буст' ? yopNum_(r.prepaid) + yopNum_(r.postpaid) + yopNum_(r.bonusPaid) : yopNum_(r[rule[1]]);
+        if (rule[1] === 'servicePrice') val += yopNum_(r.netting);   // v2.1.1: servicePrice — лишь остаток сверх взаимозачёта
         if (!r.orderId || !val) return;
         var key = r.orderId + '|' + (YOP_NO_SKU[name] ? '' : (r.shopSku || ''));
         var slot = cache.svc[key] || (cache.svc[key] = {});

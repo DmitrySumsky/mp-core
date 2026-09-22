@@ -94,10 +94,10 @@ class Cabinet:
         for name, key in (("delivery.json", "доставка"), ("crossregional_delivery.json", "миля"),
                           ("payment_transfer.json", "перевод"), ("payment_accepting.json", "эквайринг")):
             for r in rows(name):
-                add(r.get("orderId"), r.get("shopSku"), key, r.get("servicePrice"))
+                add(r.get("orderId"), r.get("shopSku"), key, (r.get("servicePrice") or 0) + (r.get("netting") or 0))
         for name in ("order_processing.json", "order_processing_on_warehouse.json", "storage_of_returns.json"):
             for r in rows(name):
-                add(r.get("orderId"), None, "возврат", r.get("servicePrice"))
+                add(r.get("orderId"), None, "возврат", (r.get("servicePrice") or 0) + (r.get("netting") or 0))
 
     def fact(self, it: dict) -> dict:
         out = dict(self.svc.get((it["oid"], it["sku"]), {}))

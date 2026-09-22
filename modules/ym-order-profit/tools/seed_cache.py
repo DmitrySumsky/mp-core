@@ -68,7 +68,7 @@ def add_services(cache, zpath):
             if name in ORDER_RULES or (r.get("orderId") and name not in DAY_RULES):
                 kind, field = ORDER_RULES.get(name, ("прочее", "servicePrice"))
                 val = (num(r.get("prepaid")) + num(r.get("postpaid")) + num(r.get("bonusPaid"))) if kind == "буст" \
-                    else num(r.get(field))
+                    else num(r.get(field)) + (num(r.get("netting")) if field == "servicePrice" else 0)
                 if not r.get("orderId") or not val:
                     continue
                 sku = "" if name in NO_SKU else (r.get("shopSku") or "")
