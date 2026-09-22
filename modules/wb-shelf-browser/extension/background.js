@@ -1,4 +1,6 @@
-/* Полки WB — фоновая часть v1.0.0 — 22.09.2026
+/* Полки WB — фоновая часть v1.2.0 — 22.09.2026
+ * v1.2.0: клик по значку расширения = «обновить все книги» — открывает вкладку WB
+ *         с меткой сбора контура «all»; искать кнопку в таблицах не нужно.
  * Единственная задача: разговор с хабом (веб-приложение Apps Script). Со страницы
  * wildberries.ru туда не достучаться — чужой домен, поэтому страница просит фон.
  * Адрес хаба и ключ — в config.js, его пишет tools/build_ext.py (в git не лежит).
@@ -31,4 +33,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     hub(msg).then(reply);
     return true;             // ответ придёт асинхронно
   }
+});
+
+chrome.action.onClicked.addListener(() => {
+  chrome.tabs.create({url: 'https://www.wildberries.ru/#wbshelf=all'});
 });
