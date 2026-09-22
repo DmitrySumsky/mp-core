@@ -38,11 +38,20 @@ function book(articles) {
   return env;
 }
 
-/** Сценарная сеть: отчёт WB, выдача, карточки. places: {запрос: [id карточек по порядку]}. */
+/** Сценарная сеть: отчёт WB, выдача, карточки, хаб браузера. places: {запрос: [id карточек по порядку]}. */
 function net(opts) {
-  const o = Object.assign({ jam30: [], jam1: [], places: {}, calls: [] }, opts || {});
+  const o = Object.assign({ jam30: [], jam1: [], places: {}, calls: [], hubPuts: [], hubResult: null }, opts || {});
   global.UrlFetchApp.fetch = function (url, req) {
     o.calls.push(url);
+    if (url.indexOf('action=put_plan') >= 0) {
+      o.hubPuts.push(JSON.parse(req.payload));
+      if (o.hubPutResponder) return o.hubPutResponder(url, req);
+      return gas.resp(200, { ok: true });
+    }
+    if (url.indexOf('action=get_result') >= 0) {
+      if (o.hubResultResponder) return o.hubResultResponder(url, req);
+      return gas.resp(200, o.hubResult || { ok: false, error: 'итога прогона пока нет' });
+    }
     if (url.indexOf('search-report') >= 0) {
       if (o.jamResponder) return o.jamResponder(url, req);
       const body = JSON.parse(req.payload);
@@ -325,6 +334,93 @@ t('автопрогон: живой прогон не дублируется, з
   const st = JSON.parse(env.props.POS_RUN); st.touchedAt = Date.now() - 31 * 60 * 1000; env.props.POS_RUN = JSON.stringify(st);
   C.posDailyTrigger();
   eq(C.posStateLoad_().phase, 'done', 'зависший доделан');
+});
+
+/* ---------- хаб браузера (v1.1.0) ---------- */
+
+const HUB_JAM30 = [item(NM1, 'чехол', 12000, 9, 20), item(NM1, 'оплётка', 800, 15, 3), item(NM2, 'чехол', 12000, 30, 1)];
+const HUB_JAM1 = [item(NM1, 'чехол', 12000, 6, 2), item(NM2, 'чехол', 12000, 28, 0)];
+
+/** Свежая книга с двумя артикулами и хабом, заполненным в «Ключи» B10/B11. */
+function hubBook() {
+  book([[NM1, '', ''], [NM2, '', '']]);
+  env.ss.getSheetByName('Ключи').getRange(10, 2).setValue('https://hub.example/exec');
+  env.ss.getSheetByName('Ключи').getRange(11, 2).setValue('секрет-хаба');
+  return env;
+}
+
+t('без хаба («Ключи» B10 пусто) органика собирается из облака, как раньше', () => {
+  book([[NM1, '', '']]);
+  net({ jam30: [item(NM1, 'чехол', 500, 9, 1)], jam1: [], places: { 'чехол': [NM1] } });
+  const text = C.posRunAll();
+  has(text, 'готов', 'обычный итог без хаба');
+  eq(C.posStateLoad_().phase, 'done', 'без хаба прогон идёт как раньше');
+});
+
+t('хаб настроен: план публикуется один раз, книга ждёт и не долбит хаб повторной публикацией', () => {
+  hubBook();
+  const n = net({ jam30: HUB_JAM30, jam1: HUB_JAM1 });
+  const text = C.posRunAll();
+  has(text, 'Органика ждёт сбора из браузера', 'сообщение про расширение');
+  eq(C.posStateLoad_().phase, 'search', 'этап не сдвинулся дальше органики');
+  eq(n.hubPuts.length, 1, 'план ушёл один раз');
+  eq(n.hubPuts[0].run, C.posStateLoad_().id, 'план привязан к прогону');
+  eq(n.hubPuts[0].searches.map(s => s.q).slice().sort(), ['оплётка', 'чехол'], 'запросы очереди в плане');
+  eq(env.triggers.map(x => x.handler), ['continueQueue'], 'продолжение поставлено на 15 минут');
+  C.posSetT0_(Date.now());
+  const text2 = C.continueQueue();
+  has(text2, 'Органика ждёт сбора из браузера', 'повторный шаг снова просто ждёт');
+  eq(n.hubPuts.length, 1, 'план не публикуется повторно');
+});
+
+t('хаб настроен: итог со своим прогоном раскладывает очередь и доводит до записи за тот же шаг', () => {
+  hubBook();
+  const n = net({ jam30: HUB_JAM30, jam1: HUB_JAM1 });
+  C.posRunAll();
+  const runId = C.posStateLoad_().id;
+  n.hubResult = { ok: true, result: { run: runId, items: [
+    { q: 'Чехол', found: { [NM1]: 5, [NM2]: 12 }, complete: true },
+    { q: 'оплётка', found: {}, complete: false }
+  ] } };
+  C.posSetT0_(Date.now());
+  const text = C.continueQueue();
+  has(text, 'готов', 'запись прошла в том же шаге, что и разбор итога');
+  eq(C.posStateLoad_().phase, 'done', 'финал за один шаг после итога хаба');
+  const pos = env.ss.getSheetByName('Позиции').dump();
+  const row = r => pos.find(x => x[1] === r[0] && x[3] === r[1]);
+  eq(row([NM1, 'чехол'])[6], 5, 'место из браузера, NM1');
+  eq(row([NM2, 'чехол'])[6], 12, 'место из браузера, NM2');
+  eq(row([NM1, 'оплётка'])[6], 'нет данных', 'complete:false — без ответа, «нет данных» в снимке');
+});
+
+t('хаб настроен: итог с чужим прогоном — книга продолжает ждать, план не публикуется повторно', () => {
+  hubBook();
+  const n = net({ jam30: HUB_JAM30, jam1: HUB_JAM1 });
+  C.posRunAll();
+  n.hubResult = { ok: true, result: { run: 'чужой-прогон', items: [{ q: 'чехол', found: {}, complete: true }] } };
+  C.posSetT0_(Date.now());
+  const text = C.continueQueue();
+  has(text, 'Органика ждёт сбора из браузера', 'итог не свой — ждём дальше');
+  eq(C.posStateLoad_().phase, 'search', 'этап не сдвинулся');
+  eq(n.hubPuts.length, 1, 'план не публикуется повторно из-за чужого итога');
+});
+
+t('хаб настроен: молчание дольше 20 часов — «нет ответа» по всем и переход к записи', () => {
+  hubBook();
+  const n = net({ jam30: HUB_JAM30, jam1: HUB_JAM1 });
+  C.posRunAll();
+  const st = JSON.parse(env.props.POS_RUN);
+  st.waitSince = Date.now() - (20 * 60 * 60 * 1000 + 1000);
+  env.props.POS_RUN = JSON.stringify(st);
+  C.posSetT0_(Date.now());
+  const text = C.continueQueue();
+  has(text, 'готов', 'после долгого молчания прогон всё равно дописывается');
+  eq(C.posStateLoad_().phase, 'done', 'дошли до финала');
+  const pos = env.ss.getSheetByName('Позиции').dump();
+  const row = r => pos.find(x => x[1] === r[0] && x[3] === r[1]);
+  eq(row([NM1, 'чехол'])[6], 'нет данных', 'молчание хаба — «нет данных» в снимке');
+  eq(row([NM2, 'чехол'])[6], 'нет данных', 'молчание хаба — «нет данных» и у второго артикула');
+  eq(env.ss.getSheetByName('Журнал').dump().pop()[3], 'готово, не всё', 'журнал отмечает недобор');
 });
 
 /* ---------- окна ---------- */

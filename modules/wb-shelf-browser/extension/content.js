@@ -1,5 +1,15 @@
-/* ПОЛКИ WB — СБОР ИЗ БРАУЗЕРА v1.2.0 — 22.09.2026 */
+/* ПОЛКИ WB — СБОР ИЗ БРАУЗЕРА v1.3.0 — 22.09.2026 */
 /*
+ * v1.3.0 — 22.09.2026
+ * КНИГА «ПОЗИЦИИ В ПОИСКЕ WB» ОСТАЛАСЬ БЕЗ ОРГАНИКИ — публичная выдача search.wb.ru тоже закрыта
+ * антиботом. Та же кнопка теперь проходит и поисковые запросы книг.
+ *   • В плане «all» список plan.also — контуры поиска (например search-vexor). Книга сама кладёт в хаб
+ *     свой план: прогон, глубина, запросы и наши артикулы в них.
+ *   • После полок и цен расширение берёт каждый такой план, если итога по его прогону ещё нет, и
+ *     ищет места наших карточек в органике: /__internal/u-search/exactmatch/ru/common/v18/search,
+ *     до depth страниц, стоп — все найдены / пустая страница / нет новых товаров.
+ *   • Итог {run, items:[{q, found, complete}]} — в хаб; книга забирает его сама.
+ *
  * v1.2.0 — 22.09.2026
  * ОДНО РАСШИРЕНИЕ НА ВСЕ КНИГИ — решение владельца: у всех менеджеров одна кнопка,
  * обновляющая все книги полок и цен (бренды, VEXOR, общая книга) — контур «all».
@@ -38,7 +48,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '1.2.0';
+  const VERSION = '1.3.0';
   const KEY_PENDING = 'wbshelf.pending';
   const PENDING_MS = 10 * 60 * 1000;
   const KEY_JOB = 'wbshelf.job';
@@ -165,6 +175,57 @@
     }
   }
 
+  // ----------------------------------------------------------- поиск (органика)
+  /** v1.3.0. Места наших карточек по одному запросу в органической выдаче. */
+  async function locate(q, nms, dest, depth) {
+    const want = new Set(nms.map(String)), found = {}, seen = new Set();
+    let type = '';
+    for (let page = 1; page <= depth; page++) {
+      const data = await wb('/__internal/u-search/exactmatch/ru/common/v18/search', {
+        ab_testing: 'false', appType: '1', curr: 'rub', dest: String(dest), lang: 'ru',
+        page: String(page), query: q, resultset: 'catalog', sort: 'popular', spp: '30',
+        suppressSpellcheck: 'false'});
+      if (data === null) return {q, found, complete: false};
+      if (data === 'EMPTY' || !data.products) break;
+      type = (data.metadata && data.metadata.catalog_type) || type;
+      let fresh = 0;
+      data.products.forEach((p, i) => {
+        const id = String(p.id);
+        if (!seen.has(id)) { seen.add(id); fresh++; }
+        if (want.has(id) && !(id in found)) found[id] = (page - 1) * PAGE + i + 1;
+      });
+      if (Object.keys(found).length >= want.size || !data.products.length || !fresh) break;
+      await sleep(PAUSE_MS);
+    }
+    return {q, found, complete: true, type};
+  }
+
+  /** v1.3.0. Все планы поиска из plan.also, по которым ещё нет итога этого прогона. */
+  async function runSearches(also) {
+    for (const contour of also || []) {
+      const ans = await hub('get_plan', contour);
+      if (!ans || !ans.ok || !ans.plan || !(ans.plan.searches || []).length) continue;
+      const plan = ans.plan;
+      const done = await hub('get_result', contour);
+      if (done && done.ok && done.result && done.result.run === plan.run) continue;
+      const key = KEY_JOB + '.search.' + contour;
+      let st = await store.get(key);
+      if (!st || st.run !== plan.run) st = {run: plan.run, items: []};
+      const list = plan.searches;
+      for (let i = st.items.length; i < list.length; i++) {
+        set('cards', `${plan.title || contour}: запросов ${i} из ${list.length}`);
+        st.items.push(await locate(list[i].q, list[i].nms, plan.dest, plan.depth || 1));
+        if (i % 10 === 9) await store.set(key, st);
+        await sleep(PAUSE_MS);
+      }
+      set('cards', `${plan.title || contour}: запросов ${list.length} из ${list.length}`);
+      const res = await hub('result', contour, {v: VERSION, contour, run: plan.run,
+        who: await store.get(KEY_WHO) || '', at: new Date().toISOString(), items: st.items});
+      if (!res || !res.ok) throw new Error('хаб не принял поиск: ' + ((res && res.error) || 'нет ответа'));
+      await store.del(key);
+    }
+  }
+
   // ------------------------------------------------------------------ прогон
   async function heartbeat(job) { job.beat = Date.now(); job.tab = TAB; await store.set(KEY_JOB, job); }
   // Номер вкладки переживает F5 (sessionStorage): обновлённая страница продолжает
@@ -220,8 +281,16 @@
     say('Отправляю в книги…');
     job.res.at = new Date().toISOString();
     job.res.finished_at = job.res.at;
-    const ans = await hub('result', plan.contour, job.res);
-    if (!ans || !ans.ok) throw new Error('хаб не принял итог: ' + ((ans && ans.error) || 'нет ответа'));
+    if (!job.sent) {
+      const ans = await hub('result', plan.contour, job.res);
+      if (!ans || !ans.ok) throw new Error('хаб не принял итог: ' + ((ans && ans.error) || 'нет ответа'));
+      job.sent = true;
+      await heartbeat(job);
+    }
+    if ((plan.also || []).length) {
+      say('Полки и цены отправлены. Теперь позиции в поиске…');
+      await runSearches(plan.also);
+    }
     await store.del(KEY_JOB);
     const bad = comps.filter(c => job.res.shelves[c].s === 'failed').length;
     say(`Готово. Книги обновятся сами за 3–5 минут${bad ? ` (не отдались полок: ${bad})` : ''}. ` +

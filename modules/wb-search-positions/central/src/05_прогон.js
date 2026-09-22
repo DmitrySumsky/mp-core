@@ -3,6 +3,11 @@
 var POS_STALE_MS = 30 * 60 * 1000;        // столько прогон может молчать, прежде чем его сочтут зависшим
 var POS_LAST_KEY = 'POS_LAST';            // итог последнего прогона — для окна «Что сейчас происходит»
 var POS_CONTINUE_HANDLER = 'continueQueue';
+/* v1.1.0. Хаб сбора из браузера: план публикуется один раз, итог книга сама перепроверяет по расписанию —
+   отдельно от POS_STALE_MS (30 мин), которого прогон не достигает: посTouch_ перед каждым posSchedule_
+   держит touchedAt свежим на каждом 15-минутном цикле ожидания. */
+var POS_HUB_WAIT_MS = 20 * 60 * 60 * 1000;   // дольше молчания браузера прогон не ждёт
+var POS_HUB_RECHECK_S = 900;                 // 15 минут между проверками итога в хабе
 
 function posIsActive_(state) {
   return !!state && state.phase !== 'done' && state.phase !== 'failed';
@@ -174,7 +179,9 @@ function posRowsFilter_(state) {
 
 /* ---------- этап 2: органика ---------- */
 
+/** v1.1.0. Публичная выдача закрыта антиботом — при заполненном хабе органику собирает браузер. */
 function posPhaseSearch_(state, cfg) {
+  if (cfg.hubUrl && cfg.hubKey) return posPhaseSearchHub_(state, cfg);
   var queue = posQueueRead_();
   var buffer = [], left = 0;
   function flush() { posQueueFlush_(buffer); buffer = []; }
@@ -205,6 +212,128 @@ function posPhaseSearch_(state, cfg) {
   state.phase = 'final';
   posTouch_(state);
   return null;
+}
+
+/* ---------- этап 2, режим браузера ---------- */
+
+/**
+ * v1.1.0. Хаб — веб-приложение Apps Script с HTTP-протоколом (все ответы JSON):
+ *   POST {hubUrl}?action=put_plan&contour=<имя>&key=<ключ>, тело — JSON план (text/plain);
+ *   GET  {hubUrl}?action=get_result&contour=<имя>&key=<ключ> → {ok:true,result:{...}} | {ok:false,error}.
+ * Хаб отвечает 302 на googleusercontent.com — UrlFetchApp идёт по редиректу сам (followRedirects по умолчанию).
+ */
+function posHubUrl_(cfg, action) {
+  return cfg.hubUrl + '?action=' + action + '&contour=' + encodeURIComponent(cfg.hubContour) +
+    '&key=' + encodeURIComponent(cfg.hubKey);
+}
+
+/** v1.1.0. Отдать план хабу. {ok:true} | {ok:false,error}. */
+function posHubPutPlan_(cfg, plan) {
+  try {
+    var resp = UrlFetchApp.fetch(posHubUrl_(cfg, 'put_plan'), {
+      method: 'post', contentType: 'text/plain', payload: JSON.stringify(plan), muteHttpExceptions: true
+    });
+    var j;
+    try { j = JSON.parse(resp.getContentText() || '{}'); } catch (e) {
+      return { ok: false, error: 'хаб вернул не JSON: ' + String(resp.getContentText()).slice(0, 160) };
+    }
+    if (!j.ok) return { ok: false, error: String(j.error || ('хаб ответил ' + resp.getResponseCode())) };
+    return { ok: true };
+  } catch (e2) {
+    return { ok: false, error: 'хаб недоступен: ' + String(e2 && e2.message || e2).slice(0, 200) };
+  }
+}
+
+/** v1.1.0. Спросить у хаба итог. Возвращает разобранный ответ как есть — свежести решает вызывающий. */
+function posHubGetResult_(cfg) {
+  try {
+    var resp = UrlFetchApp.fetch(posHubUrl_(cfg, 'get_result'), { muteHttpExceptions: true });
+    try { return JSON.parse(resp.getContentText() || '{}'); } catch (e) { return { ok: false, error: 'хаб вернул не JSON' }; }
+  } catch (e2) {
+    return { ok: false, error: 'хаб недоступен: ' + String(e2 && e2.message || e2).slice(0, 200) };
+  }
+}
+
+/** v1.1.0. Сообщение-приглашение — одно и то же на публикации плана и на каждой проверке без итога. */
+function posHubWaitText_() {
+  return 'Органика ждёт сбора из браузера: нажмите значок расширения «Полки WB» в Chrome (или меню «Полки WB» ' +
+    'в книге бренда). Книга проверит итог сама через 15 минут.';
+}
+
+/**
+ * v1.1.0. Итоги хаба {q, found:{nm: место}, complete, type?} раскладываются по строкам «Очереди» той же
+ * нормализацией запроса, что и posQueueBuild_. Строка без итога или с complete:false — «нет ответа»:
+ * в снимке это «нет данных», прошлые дни истории не затираются (как и у отказа облачной выдачи).
+ */
+function posHubApply_(state, result) {
+  var items = result.items || [], byQuery = {};
+  for (var i = 0; i < items.length; i++) {
+    byQuery[String(items[i].q || '').trim().toLowerCase().replace(/\s+/g, ' ')] = items[i];
+  }
+  var queue = posQueueRead_(), buffer = [];
+  function flush() { posQueueFlush_(buffer); buffer = []; }
+  for (var k = 0; k < queue.length; k++) {
+    var q = queue[k];
+    if (q.status !== 'ждёт') continue;
+    var item = byQuery[q.query.trim().toLowerCase().replace(/\s+/g, ' ')];
+    if (item && item.complete) {
+      q.status = 'готово';
+      q.positions = item.found || {};
+      q.type = item.type || 'браузер';
+    } else {
+      q.status = 'нет ответа';
+    }
+    if (buffer.length && buffer[buffer.length - 1].row + 1 !== q.row) flush();
+    buffer.push(q);
+  }
+  flush();
+  state.phase = 'final';
+  posTouch_(state);
+  return null;
+}
+
+/** v1.1.0. Хаб отдал не наш прогон, молчит, или недоступен: ждём дальше — до POS_HUB_WAIT_MS. */
+function posHubMarkDead_(state) {
+  var queue = posQueueRead_(), buffer = [];
+  function flush() { posQueueFlush_(buffer); buffer = []; }
+  for (var i = 0; i < queue.length; i++) {
+    var q = queue[i];
+    if (q.status !== 'ждёт') continue;
+    q.status = 'нет ответа';
+    if (buffer.length && buffer[buffer.length - 1].row + 1 !== q.row) flush();
+    buffer.push(q);
+  }
+  flush();
+  state.phase = 'final';
+  posTouch_(state);
+  return null;
+}
+
+/** v1.1.0. Режим браузера: план публикуется один раз за прогон, дальше — только опрос итога. */
+function posPhaseSearchHub_(state, cfg) {
+  if (!state.published) {
+    var queue = posQueueRead_(), searches = [];
+    for (var i = 0; i < queue.length; i++) {
+      if (queue[i].status !== 'ждёт') continue;
+      searches.push({ q: queue[i].query, nms: queue[i].nms });
+    }
+    var plan = { v: 1, contour: cfg.hubContour, title: 'Позиции в поиске — ' + (cfg.cabinet || 'книга'),
+      run: state.id, built_at: new Date().toISOString(), dest: cfg.dest, depth: cfg.depth, searches: searches };
+    var put = posHubPutPlan_(cfg, plan);
+    if (!put.ok) return posFail_(state, 'Хаб браузера не принял план: ' + put.error);
+    state.published = true;
+    state.waitSince = Date.now();
+    posTouch_(state);
+  }
+
+  var res = posHubGetResult_(cfg);
+  if (res && res.ok && res.result && res.result.run === state.id) return posHubApply_(state, res.result);
+
+  if (Date.now() - state.waitSince > POS_HUB_WAIT_MS) return posHubMarkDead_(state);
+
+  posTouch_(state);
+  posSchedule_(POS_HUB_RECHECK_S);
+  return posHubWaitText_();
 }
 
 /* ---------- этап 3: запись ---------- */
