@@ -1,5 +1,10 @@
-/* WB SHELF BROWSER — ХАБ СБОРА v1.0.1 — 22.09.2026 */
+/* WB SHELF BROWSER — ХАБ СБОРА v1.0.2 — 22.09.2026 */
 /*
+ * v1.0.2 — 22.09.2026
+ * ИТОГ ВСЕХ КНИГ НЕ ДОЕЗЖАЛ ДО ОБЛАКА — первый сбор контура «all» (179 КБ): get_result отвечал 69 с,
+ * а из GitHub Actions — 404 вместо JSON. Облако теперь читает лист «Итоги» напрямую сервисным
+ * аккаунтом; action=grant (с ключом) один раз даёт ему доступ на чтение к этой книге.
+ *
  * v1.0.1 — 22.09.2026
  * ДИАГНОСТИКА ПОЛОК НЕ ДОЛЖНА ТРОГАТЬ КНИГИ — контуры с именем diag* хаб хранит,
  * но разнос по книгам для них не запускает.
@@ -135,6 +140,13 @@ function doGet(e) {
       var plan = get_(SHEET_PLANS, contour);
       if (!plan || !plan.data) return json_({ok: false, error: 'плана для контура ' + contour + ' ещё нет'});
       return json_({ok: true, plan: plan.data, at: plan.at});
+    }
+    if (p.action === 'grant') {
+      var email = String(p.email || '');
+      if (!/iam\.gserviceaccount\.com$/.test(email)) return json_({ok: false, error: 'только сервисный аккаунт'});
+      book_().addViewer(email);
+      log_('-', 'доступ на чтение', email, '');
+      return json_({ok: true, granted: email});
     }
     if (p.action === 'get_result') {
       var res = get_(SHEET_RESULTS, contour);
