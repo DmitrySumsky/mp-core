@@ -68,18 +68,27 @@ function yopOrders_(key, campaign, filter) {
   return out;
 }
 
-/** Заказ Маркета → запись кэша: дата, статус, позиции [артикул, шт, цена продавца, ставка буста, доставлено шт]. */
+/**
+ * Заказ Маркета → запись кэша: дата, статус, позиции
+ * [артикул, шт, цена продавца, ставка буста, доставлено шт, скидка Маркета на штуку (v2.2.0)].
+ * Цена продавца — сумма всех prices[]; скидка Маркета (MARKETPLACE) — то, что Маркет доплатил за покупателя:
+ * цена на витрине = цена продавца − скидка Маркета, СПП = скидка ÷ цена продавца.
+ */
 function yopOrderRecord_(o) {
   var st = o.status || '';
   return {
     d: String(o.creationDate || '').slice(0, 10), st: st,
     it: (o.items || []).map(function (it) {
-      var n = Number(it.count || 0), deliv = YOP_DELIVERED[st] ? n : 0, price = 0;
+      var n = Number(it.count || 0), deliv = YOP_DELIVERED[st] ? n : 0, price = 0, spp = 0;
       (it.details || []).forEach(function (det) {
         if (YOP_DELIVERED[st] && (det.itemStatus === 'REJECTED' || det.itemStatus === 'RETURNED')) deliv -= Number(det.itemCount || 0);
       });
-      (it.prices || []).forEach(function (p) { price += Number(p.costPerItem || 0); });
-      return [String(it.shopSku || ''), n, Math.round(price * 100) / 100, Number(it.bidFee || 0) / 10000, Math.max(deliv, 0)];
+      (it.prices || []).forEach(function (p) {
+        price += Number(p.costPerItem || 0);
+        if (p.type === 'MARKETPLACE') spp += Number(p.costPerItem || 0);
+      });
+      return [String(it.shopSku || ''), n, Math.round(price * 100) / 100, Number(it.bidFee || 0) / 10000, Math.max(deliv, 0),
+        Math.round(spp * 100) / 100];
     })
   };
 }
@@ -119,6 +128,10 @@ function yopAddServices_(cache, files) {
         var key = r.orderId + '|' + (YOP_NO_SKU[name] ? '' : (r.shopSku || ''));
         var slot = cache.svc[key] || (cache.svc[key] = {});
         slot[rule[0]] = Math.round(((slot[rule[0]] || 0) + val) * 100) / 100;
+        // v2.2.0: надбавка за просрочку отгрузки FBS лежит в той же строке размещения отдельным полем — в «прочее»
+        if (name === 'placement.json' && yopNum_(r.qualityIndexAmount)) {
+          slot['прочее'] = Math.round(((slot['прочее'] || 0) + yopNum_(r.qualityIndexAmount)) * 100) / 100;
+        }
         if (name === 'placement.json' && r.tariff != null && r.orderCreationDateTime) {
           cache.tariffs[String(r.orderCreationDateTime).slice(0, 10) + '|' + (r.shopSku || '')] = Number(r.tariff);
         }

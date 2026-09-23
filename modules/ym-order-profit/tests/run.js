@@ -61,6 +61,39 @@ t('прогноз дня: выкуп 36/40, комиссия от выручки
   eq(r.src, 'артикул');
 });
 
+t('v2.2.0: тариф — последнего дня с начислениями, а не самый частый за 14 дней', () => {
+  const c = { tariffs: {} };
+  for (let k = 1; k <= 8; k++) c.tariffs[add(D, -14 + k) + '|A'] = 28;         // 8 дней старого тарифа
+  for (let k = 9; k <= 13; k++) c.tariffs[add(D, -14 + k) + '|A'] = 49;        // 5 дней нового
+  const t = C.yopTariffs_(c, D);
+  eq(t.sku.A, 49, 'артикул'); eq(t.cab, 49, 'кабинет');
+});
+
+t('v2.2.0: надбавка за просрочку отгрузки FBS — в «прочее», доставка и перевод — от выручки выкупленного', () => {
+  const o = [marketOrder(900, OLD, 'DELIVERED', 'Q', 1), marketOrder(901, OLD, 'CANCELLED_IN_DELIVERY', 'Q', 1)];
+  const c = cacheOf(o, {
+    'placement.json': [{ orderId: 900, shopSku: 'Q', amountWithoutBonuses: 490, qualityIndexAmount: 490, tariff: 49,
+      orderCreationDateTime: OLD + 'T10:00:00', serviceDate: MID }],
+    'delivery.json': [{ orderId: 900, shopSku: 'Q', servicePrice: 50, serviceDate: MID }],
+    'payment_transfer.json': [{ orderId: 900, shopSku: 'Q', servicePrice: 16, serviceDate: MID }]
+  });
+  eq(c.svc['900|Q'].комиссия, 490); eq(c.svc['900|Q'].прочее, 490, 'надбавка отдельно, в «прочее»');
+  const k = C.yopCoefficients_(c, C.yopItems_(c), D, null).Q;
+  near(k.доставка, 0.05, '50 ₽ с 1000 ₽ выкупленного = 5 %, а не 2,5 % от двух заказов');
+  near(k.перевод, 0.016, 'перевод 1,6 %');
+  near(k.прочее, 245, 'надбавка 490 ₽ на 2 заказанные штуки');
+});
+
+t('v2.2.0: скидка Маркета в записи заказа, цена на витрине и СПП в юнитке', () => {
+  const rec = C.yopOrderRecord_(marketOrder(950, D, 'PROCESSING', 'S', 2));
+  eq(rec.it[0][5], 500, 'MARKETPLACE на штуку');
+  const c = { orders: { 950: rec }, svc: {}, tariffs: {}, dayCost: {} };
+  const u = C.yopUnitRows_(c, C.yopItems_(c), D, {}, null, null).rows[0];
+  near(u.shop7, 500, 'витрина = 1000 − 500'); near(u.spp7, 0.5, 'СПП 50 %');
+  const old = { orders: { 951: { d: D, st: 'PROCESSING', it: [['S', 1, 1000, 0.1, 0]] } }, svc: {}, tariffs: {}, dayCost: {} };
+  eq(C.yopUnitRows_(old, C.yopItems_(old), D, {}, null, null).rows[0].spp7, null, 'старая запись без скидки — пусто');
+});
+
 t('тариф вручную действует с даты заказа, до неё — тариф из начислений', () => {
   near(C.yopForecast_(cache, D, { A: 100 }, flat, { tariff: 35, tariffFrom: add(D, -3) }).rows[0].комиссия, 1800 * 0.35, 'с даты');
   near(C.yopForecast_(cache, D, { A: 100 }, flat, { tariff: 35, tariffFrom: add(D, 3) }).rows[0].комиссия, 882, 'ещё не действует');
@@ -163,7 +196,12 @@ t('себес: лист «вручную» главнее юнитки, арти
   const v = C.yopCogs_({ name: 'Кабинет-В', unit: '' });
   near(v.map['10421'].v, 1057.11, 'число из текста с пробелом и запятой'); eq(v.unit, null);
   const f = C.yopCogsFormula_(a, '$A5', '$B5');
-  ok(f.indexOf("COUNTIFS('💲 ЧП ЯМ себес вручную'!$A:$A,$A5") > 0 && f.indexOf("VLOOKUP($B5,'А Юнит'!$C:$D,2,FALSE)") > 0, f);
+  ok(f.indexOf("COUNTIFS('💲 ЧП ЯМ себес вручную'!$A:$A,$A5") > 0 && f.indexOf('VLOOKUP(REGEXREPLACE(TRIM($B5&""),') > 0 && f.indexOf("'А Юнит'!$C:$D,2,FALSE)") > 0, f);
+  // v2.2.0: регистр и хвостовая запятая не мешают найти себес
+  const vals = C.yopCogsValues_(a);
+  eq(C.yopCogsOf_(vals, 'A'), 100); eq(C.yopCogsOf_(vals, 'a ,'), 100, 'регистр и запятая на конце');
+  eq(C.yopCogsOf_(vals, 'нет такого'), null);
+  eq(C.yopSkuNorm_("NATURI Men's Vitamins Forte 90 caps,"), "naturi men's vitamins forte 90 caps");
 });
 
 t('1️⃣ полный прогон: кабинет без ключа пропущен, новый докачан кусками, листы записаны', () => {

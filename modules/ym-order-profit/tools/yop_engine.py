@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — ДВИЖОК МОДЕЛИ v0.1.0 — 21.09.2026
+ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — ДВИЖОК МОДЕЛИ v0.2.0 — 23.09.2026
+
+v0.2.0 — 23.09.2026
+  ТО ЖЕ, ЧТО ЦЕНТРАЛЬНЫЙ КОД v2.2.0 — вопросы менеджера ЯМ по юнитке.
+  • надбавка за просрочку отгрузки FBS (qualityIndexAmount) — статья «прочее», ₽ на заказанную штуку;
+  • доставка и перевод — доля от выручки ВЫКУПЛЕННЫХ штук, прогноз — от выручки;
+  • тариф комиссии — последнего дня с начислениями, а не самый частый за 14 дней.
 
 v0.1.0 — 21.09.2026
   ЕЖЕДНЕВНЫЙ ОТЧЁТ КНИГИ СМЕШИВАЛ ЗАКАЗЫ ВЧЕРА С РАСХОДАМИ ПО ДОСТАВКАМ ПРОШЛЫХ ДНЕЙ —
@@ -33,7 +39,7 @@ TARIFF_DAYS = 14                     # дней назад: окно дейст�
 MIN_UNITS = 30                       # меньше — коэффициенты кабинета
 DEFAULT_TARIFF = 49.0
 
-COST_KEYS = ["комиссия", "буст", "доставка", "миля", "перевод", "эквайринг", "возврат", "себес"]
+COST_KEYS = ["комиссия", "буст", "доставка", "миля", "перевод", "эквайринг", "возврат", "прочее", "себес"]
 
 
 def _day(s: str) -> dt.date:
@@ -86,6 +92,7 @@ class Cabinet:
 
         for r in rows("placement.json"):
             add(r.get("orderId"), r.get("shopSku"), "комиссия", r.get("amountWithoutBonuses"))
+            add(r.get("orderId"), r.get("shopSku"), "прочее", r.get("qualityIndexAmount") or None)
             if r.get("tariff") is not None and r.get("orderCreationDateTime"):
                 self.tariff_rows.append((_day(r["orderCreationDateTime"]), r.get("shopSku"), float(r["tariff"])))
         for r in rows("boost.json"):
@@ -119,21 +126,30 @@ class Cabinet:
                 a["deliv"] += it["deliv"]
                 a["transit"] += it["n"] if it["transit"] else 0
                 a["gmv"] += it["price"] * it["n"]
+                a["gmvdel"] += it["price"] * it["deliv"]
                 a["bidgmv"] += it["price"] * it["n"] * it["bid"]
                 for k, v in f.items():
                     a[k] += v
         return agg
 
     def tariffs(self, day: dt.date) -> tuple[dict, float]:
+        """Тариф последнего дня с начислениями (в один день разные — самый частый); как yopTariffs_ книги."""
         lo = day - dt.timedelta(TARIFF_DAYS)
-        per_sku: dict = defaultdict(Counter)
-        cab: Counter = Counter()
+        seen: dict = {}
         for d, sku, t in self.tariff_rows:
             if lo <= d <= day:
-                per_sku[sku][t] += 1
-                cab[t] += 1
-        return ({s: c.most_common(1)[0][0] for s, c in per_sku.items()},
-                cab.most_common(1)[0][0] if cab else DEFAULT_TARIFF)
+                seen[(d, sku)] = t                      # как в кэше книги: одна запись на «дата|артикул»
+        last_sku: dict = {}
+        last_cab: list = [None, Counter()]
+        for (d, sku), t in seen.items():
+            m = last_sku.setdefault(sku, [None, Counter()])
+            for box in (m, last_cab):
+                if box[0] is None or d > box[0]:
+                    box[0], box[1] = d, Counter()
+                if d == box[0]:
+                    box[1][t] += 1
+        return ({s: m[1].most_common(1)[0][0] for s, m in last_sku.items()},
+                last_cab[1].most_common(1)[0][0] if last_cab[1] else DEFAULT_TARIFF)
 
     def coefficients(self, day: dt.date) -> dict:
         """{sku|'*': коэффициенты} на прогноз заказов дня day."""
@@ -146,18 +162,19 @@ class Cabinet:
             if not m or m["deliv"] < MIN_UNITS:
                 m = mile.get("*", {})
             known = max(a["n"] - a["transit"], 1)
-            g = a["gmv"] or 1
+            g = a["gmvdel"] or 0
             out[key] = dict(
                 когорта_шт=a["n"], когорта_доставлено=a["deliv"],
                 выкуп=a["deliv"] / known,
                 тариф=(t_sku.get(key, t_cab) if key != "*" else t_cab) / 100,
                 буст_k=a["буст"] / a["bidgmv"] if a["bidgmv"] else 0.0,
-                доставка=a["доставка"] / g, перевод=a["перевод"] / g,
+                доставка=a["доставка"] / g if g else 0.0, перевод=a["перевод"] / g if g else 0.0,
                 миля=(m.get("миля", 0) / m["deliv"]) if m and m.get("deliv") else 0.0,
                 эквайринг=a["эквайринг"] / a["n"] if a["n"] else 0.0,
-                возврат=a["возврат"] / a["n"] if a["n"] else 0.0)
+                возврат=a["возврат"] / a["n"] if a["n"] else 0.0,
+                прочее=a["прочее"] / a["n"] if a["n"] else 0.0)
         out.setdefault("*", dict(когорта_шт=0, когорта_доставлено=0, выкуп=0.85, тариф=t_cab / 100, буст_k=1.0,
-                                 доставка=0.05, перевод=0.016, миля=0.0, эквайринг=0.12, возврат=0.0))
+                                 доставка=0.05, перевод=0.016, миля=0.0, эквайринг=0.12, возврат=0.0, прочее=0.0))
         return out
 
     def pick(self, coef: dict, sku: str) -> tuple[dict, str]:
@@ -187,8 +204,9 @@ class Cabinet:
         n, gmv = row["n"], row["gmv"]
         rev = gmv * c["выкуп"]
         cost = dict(комиссия=rev * c["тариф"], буст=gmv * row["bid"] * c["буст_k"],
-                    доставка=gmv * c["доставка"], миля=n * c["выкуп"] * c["миля"],
-                    перевод=gmv * c["перевод"], эквайринг=n * c["эквайринг"], возврат=n * c["возврат"],
+                    доставка=rev * c["доставка"], миля=n * c["выкуп"] * c["миля"],
+                    перевод=rev * c["перевод"], эквайринг=n * c["эквайринг"], возврат=n * c["возврат"],
+                    прочее=n * c["прочее"],
                     себес=n * c["выкуп"] * cogs)
         return dict(выручка=rev, **cost, ЧП=rev - sum(cost.values()))
 

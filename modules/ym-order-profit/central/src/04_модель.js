@@ -4,7 +4,7 @@
  * факт дня и экономика одной штуки для юнитки. Файл не ходит ни в Маркет, ни в таблицу — только считает.
  *
  * Кэш кабинета (его собирает «03_сбор.js», хранит «02_настройки.js»):
- *   orders  { номер заказа: { d: дата заказа, st: статус, it: [[артикул, шт, цена, ставка буста, доставлено шт]] } }
+ *   orders  { номер заказа: { d: дата заказа, st: статус, it: [[артикул, шт, цена, ставка буста, доставлено шт, скидка Маркета]] } }
  *   svc     { "заказ|артикул": { статья: ₽ } }  — факт удержаний Маркета по заказу (отчёт «Стоимость услуг»);
  *           «заказ|» без артикула — удержания на весь заказ, делятся по штукам
  *   tariffs { "дата заказа|артикул": тариф комиссии, % }
@@ -33,7 +33,8 @@ function yopItems_(cache) {
   Object.keys(cache.orders).forEach(function (oid) {
     var o = cache.orders[oid];
     o.it.forEach(function (x) {
-      items.push({ oid: oid, day: o.d, sku: x[0], n: x[1], price: x[2], bid: x[3], deliv: x[4], transit: !!YOP_TRANSIT[o.st] });
+      items.push({ oid: oid, day: o.d, sku: x[0], n: x[1], price: x[2], bid: x[3], deliv: x[4], transit: !!YOP_TRANSIT[o.st],
+        spp: x.length > 5 ? x[5] : null });
       units[oid] = (units[oid] || 0) + x[1];
     });
   });
@@ -56,26 +57,34 @@ function yopAgg_(cache, flat, d0, d1) {
     if (it.day < d0 || it.day > d1) return;
     var f = yopFact_(cache, it, flat.units);
     [it.sku, '*'].forEach(function (key) {
-      var a = agg[key] || (agg[key] = { n: 0, deliv: 0, transit: 0, gmv: 0, bidgmv: 0 });
+      var a = agg[key] || (agg[key] = { n: 0, deliv: 0, transit: 0, gmv: 0, gmvDel: 0, bidgmv: 0 });
       a.n += it.n; a.deliv += it.deliv; a.transit += it.transit ? it.n : 0;
-      a.gmv += it.price * it.n; a.bidgmv += it.price * it.n * it.bid;
+      a.gmv += it.price * it.n; a.gmvDel += it.price * it.deliv; a.bidgmv += it.price * it.n * it.bid;
       Object.keys(f).forEach(function (k) { a[k] = (a[k] || 0) + f[k]; });
     });
   });
   return agg;
 }
 
-/** Действующий тариф комиссии: самый частый за последние TARIFF_DAYS дней — по артикулу и по кабинету. */
+/**
+ * v2.2.0. Действующий тариф комиссии — тариф ПОСЛЕДНЕГО дня заказов с начислениями за TARIFF_DAYS дней
+ * (по артикулу и по кабинету; в один день разные тарифы — самый частый). До v2.2.0 брался самый частый
+ * за 14 дней, и после смены тарифа 01.09 модель неделю считала по старому.
+ */
 function yopTariffs_(cache, day) {
   var lo = yopAddDays_(day, -YOP.TARIFF_DAYS), bySku = {}, cab = {};
+  var put = function (m, d, t) {
+    if (!m.d || d > m.d) { m.d = d; m.c = {}; }
+    if (d === m.d) m.c[t] = (m.c[t] || 0) + 1;
+  };
   Object.keys(cache.tariffs).forEach(function (key) {
     var p = key.split('|'), d = p[0], sku = p.slice(1).join('|'), t = cache.tariffs[key];
     if (d < lo || d > day) return;
-    (bySku[sku] || (bySku[sku] = {}))[t] = (bySku[sku][t] || 0) + 1;
-    cab[t] = (cab[t] || 0) + 1;
+    put(bySku[sku] || (bySku[sku] = {}), d, t);
+    put(cab, d, t);
   });
-  var mode = function (c) {
-    var best = null;
+  var mode = function (m) {
+    var best = null, c = m.c || {};
     Object.keys(c).forEach(function (t) { if (best === null || c[t] > c[best]) best = t; });
     return best === null ? null : Number(best);
   };
@@ -90,7 +99,8 @@ function yopTariffs_(cache, day) {
  *   выкуп     = доставлено ÷ заказано (только заказы с известной судьбой), когорта 14–35 дней назад
  *   тариф     = действующий тариф комиссии, доля
  *   буст_k    = списано буста ÷ (сумма заказов × ставка из заказа) — какую часть ставки Маркет реально берёт
- *   доставка, перевод — доля от суммы заказов
+ *   доставка, перевод — доля от выручки ВЫКУПЛЕННЫХ штук (v2.2.0; Маркет берёт 5 % и 1,6 % только с доставленного,
+ *                       а доля от всех заказов выглядела заниженной — 3–4,7 % вместо 5 %)
  *   миля      = ₽ на доставленную штуку по свежим заказам 8–21 день
  *   эквайринг, возврат, прочее — ₽ на заказанную штуку
  */
@@ -101,15 +111,15 @@ function yopCoefficients_(cache, flat, day, manual) {
   Object.keys(agg).forEach(function (key) {
     var a = agg[key], m = mile[key];
     if (!m || m.deliv < YOP.MIN_UNITS) m = mile['*'] || {};
-    var known = Math.max(a.n - a.transit, 1), g = a.gmv || 1;
+    var known = Math.max(a.n - a.transit, 1), gd = a.gmvDel || 0;
     var t = over != null ? over : key === '*' ? tr.cab : (tr.sku[key] != null ? tr.sku[key] : tr.cab);
     out[key] = {
       когорта_шт: a.n, когорта_доставлено: a.deliv,
       выкуп: a.deliv / known,
       тариф: t / 100,
       буст_k: a.bidgmv ? (a['буст'] || 0) / a.bidgmv : 0,
-      доставка: (a['доставка'] || 0) / g,
-      перевод: (a['перевод'] || 0) / g,
+      доставка: gd ? (a['доставка'] || 0) / gd : 0,
+      перевод: gd ? (a['перевод'] || 0) / gd : 0,
       миля: m.deliv ? (m['миля'] || 0) / m.deliv : 0,
       эквайринг: a.n ? (a['эквайринг'] || 0) / a.n : 0,
       возврат: a.n ? (a['возврат'] || 0) / a.n : 0,
@@ -137,9 +147,9 @@ function yopPredict_(row, c, cogs) {
   var cost = {
     комиссия: rev * c.тариф,
     буст: row.gmv * row.bid * c.буст_k,
-    доставка: row.gmv * c.доставка,
+    доставка: rev * c.доставка,
     миля: row.n * c.выкуп * c.миля,
-    перевод: row.gmv * c.перевод,
+    перевод: rev * c.перевод,
     эквайринг: row.n * c.эквайринг,
     возврат: row.n * c.возврат,
     прочее: row.n * c.прочее,
@@ -163,7 +173,7 @@ function yopForecast_(cache, day, cogs, flat, manual) {
   });
   var rows = Object.keys(acc).filter(function (s) { return acc[s].n > 0; }).map(function (s) {
     var a = acc[s], row = { sku: s, n: a.n, gmv: a.gmv, price: a.gmv / a.n, bid: a.gmv ? a.bidgmv / a.gmv : 0 };
-    var p = yopPick_(coef, s), cg = cogs.hasOwnProperty(s) ? cogs[s] : null;
+    var p = yopPick_(coef, s), cg = yopCogsOf_(cogs, s);
     var r = yopPredict_(row, p.c, cg || 0);
     Object.keys(r).forEach(function (k) { row[k] = r[k]; });
     row.coef = p.c; row.src = p.src; row.cogs = cg;
@@ -196,7 +206,7 @@ function yopFactDay_(cache, flat, day, cogs) {
     if (!it.transit) r.known += it.n;
     r.deliv += it.deliv;
     r.выручка += it.price * it.deliv;
-    r.себес += it.deliv * (cogs[it.sku] || 0);
+    r.себес += it.deliv * (yopCogsOf_(cogs, it.sku) || 0);
     YOP_ORDER_COSTS.forEach(function (k) { r.удержания += f[k] || 0; });
   });
   r.ЧП = r.выручка - r.удержания - r.себес;
@@ -216,10 +226,12 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
   var acc = {}, gmv30 = 0, shows = 0;
   flat.items.forEach(function (it) {
     if (it.day < lo30 || it.day > day) return;
-    var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, lastDay: '', lastGmv: 0, lastBidGmv: 0 });
+    var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, lastDay: '', lastGmv: 0, lastBidGmv: 0,
+      sppN: 0, sppGmv: 0, spp: 0 });
     a.n30 += it.n;
     gmv30 += it.price * it.n;
     if (it.day >= lo7) { a.n7 += it.n; a.gmv7 += it.price * it.n; a.bidgmv7 += it.price * it.n * it.bid; }
+    if (it.day >= lo7 && it.spp != null) { a.sppN += it.n; a.sppGmv += it.price * it.n; a.spp += it.spp * it.n; }
     if (it.day > a.lastDay) { a.lastDay = it.day; a.lastGmv = 0; a.lastBidGmv = 0; }
     if (it.day === a.lastDay) { a.lastGmv += it.price * it.n; a.lastBidGmv += it.price * it.n * it.bid; }
   });
@@ -232,16 +244,17 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
   Object.keys(acc).forEach(function (s) { skus[s] = 1; });
   Object.keys(st.fby || {}).concat(Object.keys(st.fbs || {})).forEach(function (s) { skus[s] = 1; });
   var rows = Object.keys(skus).map(function (s) {
-    var a = acc[s] || { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0 }, o = offers[s] || {}, p = yopPick_(coef, s);
+    var a = acc[s] || { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, sppN: 0, sppGmv: 0, spp: 0 }, o = offers[s] || {}, p = yopPick_(coef, s);
     var price7 = a.n7 ? a.gmv7 / a.n7 : null;
+    var shop7 = a.sppN ? (a.sppGmv - a.spp) / a.sppN : null, spp7 = a.sppGmv ? a.spp / a.sppGmv : null;
     return {
       sku: s, name: o.name || '', status: [o.fbyStatus ? 'FBY: ' + o.fbyStatus : '', o.fbsStatus ? 'FBS: ' + o.fbsStatus : '']
         .filter(String).join(', '),
-      priceCab: o.price || null, price7: price7, price: price7 || o.price || 0,
+      priceCab: o.price || null, price7: price7, price: price7 || o.price || 0, shop7: shop7, spp7: spp7,
       n30: a.n30, fby: (st.fby || {})[s] || 0, fbs: (st.fbs || {})[s] || 0,
       bid: a.gmv7 ? a.bidgmv7 / a.gmv7 : 0, drr: drr,
       bidNow: yopBidNow_(acc[s], lo7, unitData && unitData.bids, s),
-      coef: p.c, src: p.src, cogs: cogs.hasOwnProperty(s) ? cogs[s] : null
+      coef: p.c, src: p.src, cogs: yopCogsOf_(cogs, s)
     };
   });
   rows.sort(function (x, y) { return y.n30 - x.n30 || y.fby + y.fbs - x.fby - x.fbs; });
@@ -268,8 +281,8 @@ function yopUnitCalc_(x, over) {
   var c = x.coef, P = over && over.price != null ? over.price : x.price, bid = over && over.bid != null ? over.bid : x.bid;
   var b = c.выкуп || 1, cg = x.cogs || 0;
   var m = {
-    комиссия: P * c.тариф, буст: P * bid * c.буст_k / b, доставка: P * c.доставка / b, миля: c.миля,
-    перевод: P * c.перевод / b, эквайринг: c.эквайринг / b, возврат: c.возврат / b, прочее: c.прочее / b
+    комиссия: P * c.тариф, буст: P * bid * c.буст_k / b, доставка: P * c.доставка, миля: c.миля,
+    перевод: P * c.перевод, эквайринг: c.эквайринг / b, возврат: c.возврат / b, прочее: c.прочее / b
   };
   var mp = 0;
   Object.keys(m).forEach(function (k) { mp += m[k]; });

@@ -1,4 +1,4 @@
-/* ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — ЦЕНТРАЛЬНЫЙ КОД v2.1.2 — 23.09.2026 */
+/* ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — ЦЕНТРАЛЬНЫЙ КОД v2.2.0 — 23.09.2026 */
 /*
  * Что делает: каждое утро считает, сколько в итоге принесут заказы ВЧЕРАШНЕГО дня по каждому
  * кабинету Маркета, ведёт историю по дням с фактом рядом с прогнозом и собирает юнитку на данных
@@ -14,6 +14,28 @@
  *   07_пульт.js     — «Как работать», «Что сейчас происходит», «Проверка связи», миграция листов
  *
  * ИСТОРИЯ ВЕРСИЙ (новая сверху)
+ *
+ * v2.2.0 — 23.09.2026
+ *   ЮНИТКА СЧИТАЛА ОПТИМИСТИЧНЕЕ ЗАКРЫВАЮЩИХ — вопросы менеджера ЯМ после первого дня работы с юнитками, 23.09.2026:
+ *   «часть комиссий занижена», «перевод 1,2–1,5 % при 1,6 % в закрывающих, доставка 3,2–4,7 % при 5 %», «себес в юнитке
+ *   есть, а не подтягивается», «нужны цена с СПП на витрине и СПП», «куда писать комментарии, чтобы не съезжали».
+ *   Разбор по отчёту «Стоимость услуг» за сентябрь по семи кабинетам:
+ *   • комиссия: в строке размещения кроме amountWithoutBonuses есть qualityIndexAmount — надбавка за просрочку отгрузки
+ *     FBS (daysOfDelay, lateOrderExecutionFeeTariff до 100 % комиссии). Модель её не брала: у крупного кабинета 682 тыс. ₽
+ *     за сентябрь, +6,5 % к комиссии. Теперь она в статье «прочее» заказа (₽ на заказанную штуку);
+ *   • доставка и перевод: Маркет берёт ровно 5 % и 1,6 % с цены ДОСТАВЛЕННЫХ штук, а коэффициент был долей от суммы ВСЕХ
+ *     заказов когорты — отсюда 3–4,7 %. Теперь доля от выручки выкупленного, прогноз — выручка × доля (без деления на выкуп);
+ *   • тариф комиссии: последний день с начислениями вместо самого частого за 14 дней — после смены тарифа 01.09 модель
+ *     неделю считала по старому;
+ *   • себес: артикул сверяется без регистра и хвостовых знаков («ABC …» против «abc …», «X-z120» против «X-Z120»,
+ *     артикул Маркета с запятой на конце); в формуле листа — REGEXREPLACE(TRIM(…));
+ *   • юнитка: «Цена на витрине с СПП» и «СПП (скидка Маркета)» за 7 дней — из заказов: запись позиции получила шестое
+ *     поле, скидку Маркета (prices[] MARKETPLACE); у старых записей кэша поля нет — колонки пустые до пересева кэша;
+ *   • юнитка: «Заметка 1–3» в конце листа — переносятся прогоном по кабинету и артикулу, как «Ваша цена»;
+ *   • лист «как считается»: что юнитка не учитывает на штуку (хранение, подписка, транзит, утилизация, вывоз — расходы дня),
+ *     почему миля на выкупленную штуку выше тарифа (миля за отменённые в доставке тоже списывается), что можно делать с листом.
+ *   Python-эталон (yop_engine v0.2.0) и засев кэша (seed_cache v1.1.0) — так же.
+ *   Тесты: 26/26 + 10/10.
  *
  * v2.1.2 — 23.09.2026
  *   В ЮНИТКЕ «БУСТЫ НЕ ПОДТЯНУЛИСЬ» И ПРОПАЛИ ФОРМУЛЫ У ВСЕХ КАБИНЕТОВ, КРОМЕ ОДНОГО — менеджер ЯМ, 23.09.2026.
@@ -103,7 +125,7 @@
 
 /* ЯДРО: имена листов, даты, журнал событий. */
 
-var YOP_VERSION = 'v2.1.2';
+var YOP_VERSION = 'v2.2.0';
 var YOP_TIME_LIMIT_MS = 4.5 * 60 * 1000;   // этап очереди: дальше — продолжение новым запуском
 var YOP_START_LIMIT_MS = 2.5 * 60 * 1000;  // новый кусок сбора начинается, только если прошло меньше
 var YOP_STALE_MS = 30 * 60 * 1000;         // очередь молчит дольше — считается зависшей
@@ -328,14 +350,38 @@ function yopCogs_(cab) {
       if (String(r[0]).trim() === cab.name && sku && isFinite(v)) map[sku] = { v: v, src: 'вручную' };
     });
   }
-  return { map: map, unit: unit ? { name: unit.name, kc: unit.kc, cc: unit.cc } : null };
+  var norm = {};
+  Object.keys(map).forEach(function (k) { norm[yopSkuNorm_(k)] = map[k]; });
+  return { map: map, norm: norm, unit: unit ? { name: unit.name, kc: unit.kc, cc: unit.cc } : null };
 }
 
-/** { артикул: ₽ } — для модели. */
+/**
+ * v2.2.0. Артикул для сверки с юниткой: без регистра и без хвостовых пробелов и знаков препинания. В кабинетах
+ * «ABC …» против «abc …» в юнитке, «X-z120» против «X-Z120», в Маркете бывает артикул с запятой на конце —
+ * себес не находился, хотя в юнитке он есть. Формула листа (VLOOKUP) регистр и так не различает.
+ */
+function yopSkuNorm_(s) {
+  return String(s == null ? '' : s).trim().toLowerCase().replace(/[\s,.;]+$/, '');
+}
+
+/** Запись себеса артикула: точное совпадение, иначе — по нормализованному артикулу. */
+function yopCogsEntry_(cogs, sku) {
+  return cogs.map[sku] || (cogs.norm && cogs.norm[yopSkuNorm_(sku)]) || null;
+}
+
+/** { артикул: ₽ } — для модели; нормализованные артикулы — с префиксом «≈» (их читает yopCogsOf_). */
 function yopCogsValues_(cogs) {
   var out = {};
   Object.keys(cogs.map).forEach(function (k) { out[k] = cogs.map[k].v; });
+  Object.keys(cogs.norm || {}).forEach(function (k) { out['≈' + k] = cogs.norm[k].v; });
   return out;
+}
+
+/** v2.2.0. Себес артикула из yopCogsValues_: точно, иначе по нормализованному артикулу; нет — null. */
+function yopCogsOf_(values, sku) {
+  if (values.hasOwnProperty(sku)) return values[sku];
+  var n = '≈' + yopSkuNorm_(sku);
+  return values.hasOwnProperty(n) ? values[n] : null;
 }
 
 /**
@@ -348,7 +394,8 @@ function yopCogsFormula_(cogs, cabCell, skuCell) {
   var fromManual = 'SUMIFS(' + m + '$C:$C,' + m + '$A:$A,' + cabCell + ',' + m + '$B:$B,' + skuCell + ')';
   var fromUnit = '0';
   if (cogs.unit) {
-    fromUnit = "IFERROR(VLOOKUP(" + skuCell + ",'" + cogs.unit.name + "'!$" + yopCol_(cogs.unit.kc + 1) + ':$' +
+    // v2.2.0: артикул без хвостовых пробелов и знаков («…90 caps,» в Маркете); регистр VLOOKUP не различает
+    fromUnit = 'IFERROR(VLOOKUP(REGEXREPLACE(TRIM(' + skuCell + '&""),"[\\s,.;]+$",""),\'' + cogs.unit.name + "'!$" + yopCol_(cogs.unit.kc + 1) + ':$' +
       yopCol_(cogs.unit.cc + 1) + ',' + (cogs.unit.cc - cogs.unit.kc + 1) + ',FALSE),0)';
   }
   return '=IF(' + manual + ',' + fromManual + ',' + fromUnit + ')';
@@ -480,18 +527,27 @@ function yopOrders_(key, campaign, filter) {
   return out;
 }
 
-/** Заказ Маркета → запись кэша: дата, статус, позиции [артикул, шт, цена продавца, ставка буста, доставлено шт]. */
+/**
+ * Заказ Маркета → запись кэша: дата, статус, позиции
+ * [артикул, шт, цена продавца, ставка буста, доставлено шт, скидка Маркета на штуку (v2.2.0)].
+ * Цена продавца — сумма всех prices[]; скидка Маркета (MARKETPLACE) — то, что Маркет доплатил за покупателя:
+ * цена на витрине = цена продавца − скидка Маркета, СПП = скидка ÷ цена продавца.
+ */
 function yopOrderRecord_(o) {
   var st = o.status || '';
   return {
     d: String(o.creationDate || '').slice(0, 10), st: st,
     it: (o.items || []).map(function (it) {
-      var n = Number(it.count || 0), deliv = YOP_DELIVERED[st] ? n : 0, price = 0;
+      var n = Number(it.count || 0), deliv = YOP_DELIVERED[st] ? n : 0, price = 0, spp = 0;
       (it.details || []).forEach(function (det) {
         if (YOP_DELIVERED[st] && (det.itemStatus === 'REJECTED' || det.itemStatus === 'RETURNED')) deliv -= Number(det.itemCount || 0);
       });
-      (it.prices || []).forEach(function (p) { price += Number(p.costPerItem || 0); });
-      return [String(it.shopSku || ''), n, Math.round(price * 100) / 100, Number(it.bidFee || 0) / 10000, Math.max(deliv, 0)];
+      (it.prices || []).forEach(function (p) {
+        price += Number(p.costPerItem || 0);
+        if (p.type === 'MARKETPLACE') spp += Number(p.costPerItem || 0);
+      });
+      return [String(it.shopSku || ''), n, Math.round(price * 100) / 100, Number(it.bidFee || 0) / 10000, Math.max(deliv, 0),
+        Math.round(spp * 100) / 100];
     })
   };
 }
@@ -531,6 +587,10 @@ function yopAddServices_(cache, files) {
         var key = r.orderId + '|' + (YOP_NO_SKU[name] ? '' : (r.shopSku || ''));
         var slot = cache.svc[key] || (cache.svc[key] = {});
         slot[rule[0]] = Math.round(((slot[rule[0]] || 0) + val) * 100) / 100;
+        // v2.2.0: надбавка за просрочку отгрузки FBS лежит в той же строке размещения отдельным полем — в «прочее»
+        if (name === 'placement.json' && yopNum_(r.qualityIndexAmount)) {
+          slot['прочее'] = Math.round(((slot['прочее'] || 0) + yopNum_(r.qualityIndexAmount)) * 100) / 100;
+        }
         if (name === 'placement.json' && r.tariff != null && r.orderCreationDateTime) {
           cache.tariffs[String(r.orderCreationDateTime).slice(0, 10) + '|' + (r.shopSku || '')] = Number(r.tariff);
         }
@@ -667,7 +727,7 @@ function yopBids_(k) {
  * факт дня и экономика одной штуки для юнитки. Файл не ходит ни в Маркет, ни в таблицу — только считает.
  *
  * Кэш кабинета (его собирает «03_сбор.js», хранит «02_настройки.js»):
- *   orders  { номер заказа: { d: дата заказа, st: статус, it: [[артикул, шт, цена, ставка буста, доставлено шт]] } }
+ *   orders  { номер заказа: { d: дата заказа, st: статус, it: [[артикул, шт, цена, ставка буста, доставлено шт, скидка Маркета]] } }
  *   svc     { "заказ|артикул": { статья: ₽ } }  — факт удержаний Маркета по заказу (отчёт «Стоимость услуг»);
  *           «заказ|» без артикула — удержания на весь заказ, делятся по штукам
  *   tariffs { "дата заказа|артикул": тариф комиссии, % }
@@ -696,7 +756,8 @@ function yopItems_(cache) {
   Object.keys(cache.orders).forEach(function (oid) {
     var o = cache.orders[oid];
     o.it.forEach(function (x) {
-      items.push({ oid: oid, day: o.d, sku: x[0], n: x[1], price: x[2], bid: x[3], deliv: x[4], transit: !!YOP_TRANSIT[o.st] });
+      items.push({ oid: oid, day: o.d, sku: x[0], n: x[1], price: x[2], bid: x[3], deliv: x[4], transit: !!YOP_TRANSIT[o.st],
+        spp: x.length > 5 ? x[5] : null });
       units[oid] = (units[oid] || 0) + x[1];
     });
   });
@@ -719,26 +780,34 @@ function yopAgg_(cache, flat, d0, d1) {
     if (it.day < d0 || it.day > d1) return;
     var f = yopFact_(cache, it, flat.units);
     [it.sku, '*'].forEach(function (key) {
-      var a = agg[key] || (agg[key] = { n: 0, deliv: 0, transit: 0, gmv: 0, bidgmv: 0 });
+      var a = agg[key] || (agg[key] = { n: 0, deliv: 0, transit: 0, gmv: 0, gmvDel: 0, bidgmv: 0 });
       a.n += it.n; a.deliv += it.deliv; a.transit += it.transit ? it.n : 0;
-      a.gmv += it.price * it.n; a.bidgmv += it.price * it.n * it.bid;
+      a.gmv += it.price * it.n; a.gmvDel += it.price * it.deliv; a.bidgmv += it.price * it.n * it.bid;
       Object.keys(f).forEach(function (k) { a[k] = (a[k] || 0) + f[k]; });
     });
   });
   return agg;
 }
 
-/** Действующий тариф комиссии: самый частый за последние TARIFF_DAYS дней — по артикулу и по кабинету. */
+/**
+ * v2.2.0. Действующий тариф комиссии — тариф ПОСЛЕДНЕГО дня заказов с начислениями за TARIFF_DAYS дней
+ * (по артикулу и по кабинету; в один день разные тарифы — самый частый). До v2.2.0 брался самый частый
+ * за 14 дней, и после смены тарифа 01.09 модель неделю считала по старому.
+ */
 function yopTariffs_(cache, day) {
   var lo = yopAddDays_(day, -YOP.TARIFF_DAYS), bySku = {}, cab = {};
+  var put = function (m, d, t) {
+    if (!m.d || d > m.d) { m.d = d; m.c = {}; }
+    if (d === m.d) m.c[t] = (m.c[t] || 0) + 1;
+  };
   Object.keys(cache.tariffs).forEach(function (key) {
     var p = key.split('|'), d = p[0], sku = p.slice(1).join('|'), t = cache.tariffs[key];
     if (d < lo || d > day) return;
-    (bySku[sku] || (bySku[sku] = {}))[t] = (bySku[sku][t] || 0) + 1;
-    cab[t] = (cab[t] || 0) + 1;
+    put(bySku[sku] || (bySku[sku] = {}), d, t);
+    put(cab, d, t);
   });
-  var mode = function (c) {
-    var best = null;
+  var mode = function (m) {
+    var best = null, c = m.c || {};
     Object.keys(c).forEach(function (t) { if (best === null || c[t] > c[best]) best = t; });
     return best === null ? null : Number(best);
   };
@@ -753,7 +822,8 @@ function yopTariffs_(cache, day) {
  *   выкуп     = доставлено ÷ заказано (только заказы с известной судьбой), когорта 14–35 дней назад
  *   тариф     = действующий тариф комиссии, доля
  *   буст_k    = списано буста ÷ (сумма заказов × ставка из заказа) — какую часть ставки Маркет реально берёт
- *   доставка, перевод — доля от суммы заказов
+ *   доставка, перевод — доля от выручки ВЫКУПЛЕННЫХ штук (v2.2.0; Маркет берёт 5 % и 1,6 % только с доставленного,
+ *                       а доля от всех заказов выглядела заниженной — 3–4,7 % вместо 5 %)
  *   миля      = ₽ на доставленную штуку по свежим заказам 8–21 день
  *   эквайринг, возврат, прочее — ₽ на заказанную штуку
  */
@@ -764,15 +834,15 @@ function yopCoefficients_(cache, flat, day, manual) {
   Object.keys(agg).forEach(function (key) {
     var a = agg[key], m = mile[key];
     if (!m || m.deliv < YOP.MIN_UNITS) m = mile['*'] || {};
-    var known = Math.max(a.n - a.transit, 1), g = a.gmv || 1;
+    var known = Math.max(a.n - a.transit, 1), gd = a.gmvDel || 0;
     var t = over != null ? over : key === '*' ? tr.cab : (tr.sku[key] != null ? tr.sku[key] : tr.cab);
     out[key] = {
       когорта_шт: a.n, когорта_доставлено: a.deliv,
       выкуп: a.deliv / known,
       тариф: t / 100,
       буст_k: a.bidgmv ? (a['буст'] || 0) / a.bidgmv : 0,
-      доставка: (a['доставка'] || 0) / g,
-      перевод: (a['перевод'] || 0) / g,
+      доставка: gd ? (a['доставка'] || 0) / gd : 0,
+      перевод: gd ? (a['перевод'] || 0) / gd : 0,
       миля: m.deliv ? (m['миля'] || 0) / m.deliv : 0,
       эквайринг: a.n ? (a['эквайринг'] || 0) / a.n : 0,
       возврат: a.n ? (a['возврат'] || 0) / a.n : 0,
@@ -800,9 +870,9 @@ function yopPredict_(row, c, cogs) {
   var cost = {
     комиссия: rev * c.тариф,
     буст: row.gmv * row.bid * c.буст_k,
-    доставка: row.gmv * c.доставка,
+    доставка: rev * c.доставка,
     миля: row.n * c.выкуп * c.миля,
-    перевод: row.gmv * c.перевод,
+    перевод: rev * c.перевод,
     эквайринг: row.n * c.эквайринг,
     возврат: row.n * c.возврат,
     прочее: row.n * c.прочее,
@@ -826,7 +896,7 @@ function yopForecast_(cache, day, cogs, flat, manual) {
   });
   var rows = Object.keys(acc).filter(function (s) { return acc[s].n > 0; }).map(function (s) {
     var a = acc[s], row = { sku: s, n: a.n, gmv: a.gmv, price: a.gmv / a.n, bid: a.gmv ? a.bidgmv / a.gmv : 0 };
-    var p = yopPick_(coef, s), cg = cogs.hasOwnProperty(s) ? cogs[s] : null;
+    var p = yopPick_(coef, s), cg = yopCogsOf_(cogs, s);
     var r = yopPredict_(row, p.c, cg || 0);
     Object.keys(r).forEach(function (k) { row[k] = r[k]; });
     row.coef = p.c; row.src = p.src; row.cogs = cg;
@@ -859,7 +929,7 @@ function yopFactDay_(cache, flat, day, cogs) {
     if (!it.transit) r.known += it.n;
     r.deliv += it.deliv;
     r.выручка += it.price * it.deliv;
-    r.себес += it.deliv * (cogs[it.sku] || 0);
+    r.себес += it.deliv * (yopCogsOf_(cogs, it.sku) || 0);
     YOP_ORDER_COSTS.forEach(function (k) { r.удержания += f[k] || 0; });
   });
   r.ЧП = r.выручка - r.удержания - r.себес;
@@ -879,10 +949,12 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
   var acc = {}, gmv30 = 0, shows = 0;
   flat.items.forEach(function (it) {
     if (it.day < lo30 || it.day > day) return;
-    var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, lastDay: '', lastGmv: 0, lastBidGmv: 0 });
+    var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, lastDay: '', lastGmv: 0, lastBidGmv: 0,
+      sppN: 0, sppGmv: 0, spp: 0 });
     a.n30 += it.n;
     gmv30 += it.price * it.n;
     if (it.day >= lo7) { a.n7 += it.n; a.gmv7 += it.price * it.n; a.bidgmv7 += it.price * it.n * it.bid; }
+    if (it.day >= lo7 && it.spp != null) { a.sppN += it.n; a.sppGmv += it.price * it.n; a.spp += it.spp * it.n; }
     if (it.day > a.lastDay) { a.lastDay = it.day; a.lastGmv = 0; a.lastBidGmv = 0; }
     if (it.day === a.lastDay) { a.lastGmv += it.price * it.n; a.lastBidGmv += it.price * it.n * it.bid; }
   });
@@ -895,16 +967,17 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
   Object.keys(acc).forEach(function (s) { skus[s] = 1; });
   Object.keys(st.fby || {}).concat(Object.keys(st.fbs || {})).forEach(function (s) { skus[s] = 1; });
   var rows = Object.keys(skus).map(function (s) {
-    var a = acc[s] || { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0 }, o = offers[s] || {}, p = yopPick_(coef, s);
+    var a = acc[s] || { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, sppN: 0, sppGmv: 0, spp: 0 }, o = offers[s] || {}, p = yopPick_(coef, s);
     var price7 = a.n7 ? a.gmv7 / a.n7 : null;
+    var shop7 = a.sppN ? (a.sppGmv - a.spp) / a.sppN : null, spp7 = a.sppGmv ? a.spp / a.sppGmv : null;
     return {
       sku: s, name: o.name || '', status: [o.fbyStatus ? 'FBY: ' + o.fbyStatus : '', o.fbsStatus ? 'FBS: ' + o.fbsStatus : '']
         .filter(String).join(', '),
-      priceCab: o.price || null, price7: price7, price: price7 || o.price || 0,
+      priceCab: o.price || null, price7: price7, price: price7 || o.price || 0, shop7: shop7, spp7: spp7,
       n30: a.n30, fby: (st.fby || {})[s] || 0, fbs: (st.fbs || {})[s] || 0,
       bid: a.gmv7 ? a.bidgmv7 / a.gmv7 : 0, drr: drr,
       bidNow: yopBidNow_(acc[s], lo7, unitData && unitData.bids, s),
-      coef: p.c, src: p.src, cogs: cogs.hasOwnProperty(s) ? cogs[s] : null
+      coef: p.c, src: p.src, cogs: yopCogsOf_(cogs, s)
     };
   });
   rows.sort(function (x, y) { return y.n30 - x.n30 || y.fby + y.fbs - x.fby - x.fbs; });
@@ -931,8 +1004,8 @@ function yopUnitCalc_(x, over) {
   var c = x.coef, P = over && over.price != null ? over.price : x.price, bid = over && over.bid != null ? over.bid : x.bid;
   var b = c.выкуп || 1, cg = x.cogs || 0;
   var m = {
-    комиссия: P * c.тариф, буст: P * bid * c.буст_k / b, доставка: P * c.доставка / b, миля: c.миля,
-    перевод: P * c.перевод / b, эквайринг: c.эквайринг / b, возврат: c.возврат / b, прочее: c.прочее / b
+    комиссия: P * c.тариф, буст: P * bid * c.буст_k / b, доставка: P * c.доставка, миля: c.миля,
+    перевод: P * c.перевод, эквайринг: c.эквайринг / b, возврат: c.возврат / b, прочее: c.прочее / b
   };
   var mp = 0;
   Object.keys(m).forEach(function (k) { mp += m[k]; });
@@ -975,14 +1048,14 @@ function yopForecastAll_(day) {
 // --- «🧾 ЧП ЯМ по заказам» ---------------------------------------------------------------
 
 var YOP_DETAIL_HEAD = ['Кабинет', 'Артикул', 'Заказано, шт', 'Цена ср., ₽', 'Сумма заказов, ₽', 'Ставка буста ср.',
-  'Выкуп', 'Тариф комиссии', 'Буст: доля ставки к списанию', 'Доставка, % цены', 'Перевод денег, % цены',
-  'Ср. миля, ₽ на доставл.', 'Эквайринг, ₽ на шт', 'Невыкуп/возврат, ₽ на шт', 'Прочее по заказу, ₽ на шт', 'Себес, ₽',
+  'Выкуп', 'Тариф комиссии', 'Буст: доля ставки к списанию', 'Доставка, % выручки выкупленного', 'Перевод денег, % выручки выкупленного',
+  'Ср. миля, ₽ на доставл.', 'Эквайринг, ₽ на шт', 'Невыкуп/возврат, ₽ на шт', 'Прочее по заказу (просрочка FBS, баллы за отзывы), ₽ на шт', 'Себес, ₽',
   'Выручка (прогноз), ₽', 'Комиссия, ₽', 'Буст продаж, ₽', 'Доставка, ₽', 'Ср. миля, ₽', 'Перевод денег, ₽',
   'Эквайринг, ₽', 'Невыкупы/возвраты, ₽', 'Прочее по заказу, ₽', 'Себес, ₽', 'ЧП заказов, ₽', 'ЧП на заказ, ₽',
   'Маржа к сумме заказов', 'Коэффициенты по', 'Когорта, шт', 'Себес найден'];
 
 function yopCogsSrc_(cab, sku) {
-  var m = cab.cogs.map[sku];
+  var m = yopCogsEntry_(cab.cogs, sku);
   return m ? m.src : 'НЕТ — себес 0';
 }
 
@@ -994,8 +1067,8 @@ function yopWriteDetail_(day, all) {
       rows.push([cab.name, x.sku, x.n, x.price, '=C' + r + '*D' + r, x.bid,
         c.выкуп, c.тариф, c.буст_k, c.доставка, c.перевод, c.миля, c.эквайринг, c.возврат, c.прочее,
         yopCogsFormula_(cab.cogs, '$A' + r, '$B' + r),
-        '=E' + r + '*G' + r, '=Q' + r + '*H' + r, '=E' + r + '*F' + r + '*I' + r, '=E' + r + '*J' + r,
-        '=C' + r + '*G' + r + '*L' + r, '=E' + r + '*K' + r, '=C' + r + '*M' + r, '=C' + r + '*N' + r,
+        '=E' + r + '*G' + r, '=Q' + r + '*H' + r, '=E' + r + '*F' + r + '*I' + r, '=Q' + r + '*J' + r,   // v2.2.0: доставка и перевод — от выручки
+        '=C' + r + '*G' + r + '*L' + r, '=Q' + r + '*K' + r, '=C' + r + '*M' + r, '=C' + r + '*N' + r,
         '=C' + r + '*O' + r, '=C' + r + '*G' + r + '*P' + r,
         '=Q' + r + '-SUM(R' + r + ':Z' + r + ')', '=IFERROR(AA' + r + '/C' + r + ',0)', '=IFERROR(AA' + r + '/E' + r + ',0)',
         x.src, c.когорта_шт, yopCogsSrc_(cab, x.sku)]);
@@ -1179,6 +1252,9 @@ var YOP_UNIT_SPEC = [
   ['price7', 'Цена продажи ср. за 7 дн (факт), ₽', '', 'rub', '', function (x) { return x.price7 == null ? '' : Math.round(x.price7); }],
   ['bidNow', 'Ставка буста сейчас (последние заказы)', '', 'pct', '', function (x) { return x.bidNow == null ? '' : x.bidNow; }],
   ['bid7', 'Ставка буста ср. за 7 дн (факт)', '', 'pct', '', function (x) { return x.bid; }],
+  // v2.2.0: цена на витрине и СПП — из заказов: цена продавца минус скидка Маркета (MARKETPLACE)
+  ['shop7', 'Цена на витрине с СПП ср. за 7 дн, ₽', '', 'rub', '', function (x) { return x.shop7 == null ? '' : Math.round(x.shop7); }],
+  ['spp7', 'СПП (скидка Маркета) ср. за 7 дн', '', 'pct', '', function (x) { return x.spp7 == null ? '' : x.spp7; }],
   ['n30', 'Заказано за 30 дн, шт', '', 'int', '', function (x) { return x.n30; }],
   ['perDay', 'Заказов в день, шт', '', 'num1', '', function (x, L) { return '=' + L('n30') + '/' + YOP.UNIT_DAYS; }],
   ['fby', 'Остаток FBY (доступно), шт', '', 'int', '', function (x) { return x.fby; }],
@@ -1195,8 +1271,8 @@ var YOP_UNIT_SPEC = [
     return '=IF(' + L('myBid') + '="",IF(' + L('bidNow') + '="",' + L('bid7') + ',' + L('bidNow') + '),IF(' + L('myBid') + '>1,' +
       L('myBid') + '/100,' + L('myBid') + '))'; }],
   ['sCost', 'Расходы Маркета на штуку (сценарий), ₽', '', 'rub', 'green', function (x, L) {
-    return '=' + L('sPrice') + '*' + L('k_tariff') + '+' + L('k_mile') + '+IFERROR((' + L('sPrice') + '*' + L('sBid') + '*' + L('k_boost') +
-      '+' + L('sPrice') + '*' + L('k_deliv') + '+' + L('sPrice') + '*' + L('k_transfer') + '+' + L('k_acq') + '+' + L('k_ret') + '+' +
+    return '=' + L('sPrice') + '*(' + L('k_tariff') + '+' + L('k_deliv') + '+' + L('k_transfer') + ')+' + L('k_mile') +
+      '+IFERROR((' + L('sPrice') + '*' + L('sBid') + '*' + L('k_boost') + '+' + L('k_acq') + '+' + L('k_ret') + '+' +
       L('k_other') + ')/' + L('k_buyout') + ',0)'; }],
   ['sMargin', 'Маржа (сценарий), ₽', '', 'rub', 'green', function (x, L) {
     return '=' + L('sPrice') + '-' + L('sCost') + '-' + L('cogs') + '-IFERROR(' + L('sPrice') + '*' + L('k_shows') + '/' + L('k_buyout') + ',0)'; }],
@@ -1219,41 +1295,49 @@ var YOP_UNIT_SPEC = [
   ['k_buyout', 'Выкуп', 'Коэффициенты модели (факт удержаний по дозревшим заказам), можно менять', 'pct', 'blue', function (x) { return x.coef.выкуп; }],
   ['k_tariff', 'Тариф комиссии', '', 'pct', 'blue', function (x) { return x.coef.тариф; }],
   ['k_boost', 'Буст: доля ставки к списанию', '', 'pct', 'blue', function (x) { return x.coef.буст_k; }],
-  ['k_deliv', 'Доставка, % цены', '', 'pct', 'blue', function (x) { return x.coef.доставка; }],
-  ['k_transfer', 'Перевод денег, % цены', '', 'pct', 'blue', function (x) { return x.coef.перевод; }],
+  ['k_deliv', 'Доставка, % цены выкупленной', '', 'pct', 'blue', function (x) { return x.coef.доставка; }],
+  ['k_transfer', 'Перевод денег, % цены выкупленной', '', 'pct', 'blue', function (x) { return x.coef.перевод; }],
   ['k_mile', 'Ср. миля, ₽ на доставл.', '', 'rub2', 'blue', function (x) { return x.coef.миля; }],
   ['k_acq', 'Эквайринг, ₽ на заказ', '', 'rub2', 'blue', function (x) { return x.coef.эквайринг; }],
   ['k_ret', 'Невыкуп/возврат, ₽ на заказ', '', 'rub2', 'blue', function (x) { return x.coef.возврат; }],
-  ['k_other', 'Прочее по заказу, ₽ на заказ', '', 'rub2', 'blue', function (x) { return x.coef.прочее; }],
+  ['k_other', 'Прочее по заказу (просрочка FBS, баллы за отзывы), ₽ на заказ', '', 'rub2', 'blue', function (x) { return x.coef.прочее; }],
   ['k_shows', 'Реклама за показы, % от заказов (условно)', '', 'pct', 'grey', function (x) { return x.drr; }],
   ['cogs', 'Себес, ₽', '', 'rub', '', function (x, L, cab) { return yopCogsFormula_(cab.cogs, L('cab', true), L('sku', true)); }],
   // расшифровка «Расходы Маркета на штуку» (факт)
   ['c_comm', 'Комиссия, ₽', 'Расходы на выкупленную штуку по факту', 'rub', '', function (x, L) { return '=' + L('price') + '*' + L('k_tariff'); }],
   ['c_boost', 'Буст продаж, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('price') + '*' + L('bid7') + '*' + L('k_boost'), L); }],
-  ['c_deliv', 'Доставка, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('price') + '*' + L('k_deliv'), L); }],
+  ['c_deliv', 'Доставка, ₽', '', 'rub', '', function (x, L) { return '=' + L('price') + '*' + L('k_deliv'); }],
   ['c_mile', 'Ср. миля, ₽', '', 'rub', '', function (x, L) { return '=' + L('k_mile'); }],
-  ['c_transfer', 'Перевод денег, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('price') + '*' + L('k_transfer'), L); }],
+  ['c_transfer', 'Перевод денег, ₽', '', 'rub', '', function (x, L) { return '=' + L('price') + '*' + L('k_transfer'); }],
   ['c_acq', 'Эквайринг, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('k_acq'), L); }],
   ['c_ret', 'Невыкупы/возвраты, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('k_ret'), L); }],
   ['c_other', 'Прочее по заказу, ₽', '', 'rub', '', function (x, L) { return yopDivB_(L('k_other'), L); }],
   ['src', 'Коэффициенты по', '', '', '', function (x) { return x.src; }],
   ['cohort', 'Когорта, шт', '', 'int', '', function (x) { return x.coef.когорта_шт; }],
-  ['cogsSrc', 'Себес найден', '', '', '', function (x, L, cab) { return yopCogsSrc_(cab, x.sku); }]
+  ['cogsSrc', 'Себес найден', '', '', '', function (x, L, cab) { return yopCogsSrc_(cab, x.sku); }],
+  // v2.2.0: заметки менеджера — привязаны к кабинету и артикулу, прогон их переносит
+  ['note1', 'Заметка 1', 'Заметки: пишите что угодно — прогон переносит их вместе с артикулом', '', 'blue',
+    function (x, L, cab, keep) { return keep.notes[0]; }],
+  ['note2', 'Заметка 2', '', '', 'blue', function (x, L, cab, keep) { return keep.notes[1]; }],
+  ['note3', 'Заметка 3', '', '', 'blue', function (x, L, cab, keep) { return keep.notes[2]; }]
 ];
+var YOP_UNIT_NOTES = ['Заметка 1', 'Заметка 2', 'Заметка 3'];
 var YOP_UNIT_HEAD = YOP_UNIT_SPEC.map(function (c) { return c[1]; });
 var YOP_UNIT_FMT = { rub: '#,##0', rub2: '#,##0.00', pct: '0.0%', int: '#,##0', num1: '#,##0.0' };
 var YOP_UNIT_BG = { blue: YOP_BLUE, grey: YOP_GREY, green: '#e6f4ea', greenBold: '#e6f4ea' };
 
-/** v2.1.0. «Ваша цена» и «Ваша ставка буста» с прошлого прогона: { "кабинет|артикул": { price, bid } }. */
+/** v2.1.0. «Ваша цена», «Ваша ставка буста» и (v2.2.0) заметки с прошлого прогона: { "кабинет|артикул": { price, bid, notes } }. */
 function yopUnitKeep_(sh) {
   var out = {}, last = sh.getLastRow();
   if (last <= YOP_HEAD_ROW) return out;
   var head = sh.getRange(YOP_HEAD_ROW, 1, 1, sh.getLastColumn()).getValues()[0].map(function (h) { return String(h).trim(); });
   var ip = head.indexOf('Ваша цена, ₽'), ib = head.indexOf('Ваша ставка буста, %');
-  if (ip < 0 && ib < 0) return out;
+  var inotes = YOP_UNIT_NOTES.map(function (h) { return head.indexOf(h); });
+  if (ip < 0 && ib < 0 && inotes.every(function (i) { return i < 0; })) return out;
   sh.getRange(YOP_HEAD_ROW + 1, 1, last - YOP_HEAD_ROW, head.length).getValues().forEach(function (r) {
     var p = ip >= 0 ? r[ip] : '', b = ib >= 0 ? r[ib] : '';
-    if (p !== '' || b !== '') out[String(r[0]) + '|' + String(r[1])] = { price: p, bid: b };
+    var notes = inotes.map(function (i) { return i >= 0 ? r[i] : ''; });
+    if (p !== '' || b !== '' || notes.join('') !== '') out[String(r[0]) + '|' + String(r[1])] = { price: p, bid: b, notes: notes };
   });
   return out;
 }
@@ -1269,7 +1353,7 @@ function yopWriteUnit_(day, all) {
       (data ? (data.bids ? '' : ', текущих ставок буста нет') : ' (цены и остатки ещё не загружены)'));
     u.rows.forEach(function (x) {
       var L = function (key, abs) { return (abs ? '$' : '') + idx[key] + r; };
-      var k = keep[cab.name + '|' + x.sku] || { price: '', bid: '' };
+      var k = keep[cab.name + '|' + x.sku] || { price: '', bid: '', notes: ['', '', ''] };
       rows.push(YOP_UNIT_SPEC.map(function (c) { return c[5](x, L, cab, k); }));
       r++;
     });
@@ -1315,12 +1399,12 @@ function yopWriteCoef_(day, all) {
     'Выкуп и доли расходов — заказы ' + yopRu_(yopAddDays_(day, -YOP.COHORT_FROM)) + '–' +
     yopRu_(yopAddDays_(day, -YOP.COHORT_TO)) + ' (только с известной судьбой); средняя миля — заказы ' +
     yopRu_(yopAddDays_(day, -YOP.MILE_FROM)) + '–' + yopRu_(yopAddDays_(day, -YOP.MILE_TO)) +
-    '; тариф — самый частый в начислениях комиссии за 14 дней' +
+    '; тариф — последнего дня с начислениями комиссии за 14 дней' +
     (manual.length ? ', вручную с листа настроек: ' + manual.join(', ') : '') + '. Артикул с когортой меньше ' + YOP.MIN_UNITS +
     ' шт считается по строке «* весь кабинет».');
   yopHeader_(sh, ['Кабинет', 'Артикул', 'Когорта: заказано, шт', 'Когорта: доставлено, шт', 'Выкуп', 'Тариф комиссии',
-    'Буст: доля ставки к списанию', 'Доставка, % цены', 'Перевод, % цены', 'Ср. миля, ₽ на доставл.', 'Эквайринг, ₽ на шт',
-    'Невыкуп/возврат, ₽ на шт', 'Прочее по заказу, ₽ на шт'], { 1: 130, 2: 300 });
+    'Буст: доля ставки к списанию', 'Доставка, % выручки выкупленного', 'Перевод, % выручки выкупленного', 'Ср. миля, ₽ на доставл.',
+    'Эквайринг, ₽ на шт', 'Невыкуп/возврат, ₽ на шт', 'Прочее по заказу (просрочка FBS, баллы за отзывы), ₽ на шт'], { 1: 130, 2: 300 });
   if (rows.length) {
     sh.getRange(YOP_HEAD_ROW + 1, 2, rows.length, 1).setNumberFormat('@');
     sh.getRange(YOP_HEAD_ROW + 1, 1, rows.length, rows[0].length).setValues(rows);
@@ -1350,8 +1434,12 @@ function yopWriteHelp_() {
     ['Из факта по прошлым заказам. Отчёт Маркета «Стоимость услуг» привязывает каждое удержание к номеру заказа, поэтому по ' +
      'заказам 14–35 дней назад (их судьба уже известна) видно, какая доля выкупилась и сколько Маркет по ним списал.'],
     ['Выкуп = доставлено ÷ заказано. Буст = ставка из заказа × доля ставки, которую Маркет реально списал. Доставка и перевод — ' +
-     'доля от суммы заказов. Средняя миля — ₽ на доставленную штуку по заказам 8–21 день (ставка меняется быстро). ' +
-     'Тариф комиссии — действующий, из последних начислений, или вручную с листа настроек.'],
+     'доля от выручки выкупленных штук (Маркет берёт 5 % и 1,6 % только с доставленного). Средняя миля — ₽ на доставленную ' +
+     'штуку по заказам 8–21 день (ставка меняется быстро; миля за заказы, отменённые в доставке, тоже входит — поэтому на ' +
+     'выкупленную штуку она чуть выше тарифа). Тариф комиссии — последнего дня с начислениями или вручную с листа настроек. ' +
+     '«Прочее по заказу» — надбавка за просрочку отгрузки FBS (в отчёте она в той же строке размещения) и баллы за отзывы.'],
+    ['Что юнитка НЕ учитывает на штуку: хранение, подписку, транзит, утилизацию, вывоз со склада — это расходы дня, они стоят ' +
+     'отдельными колонками на листе «' + YOP_SH.days + '». Реклама за показы (полки, баннеры, оплата за показы) — на штуку условно.'],
     ['У артикула меньше ' + YOP.MIN_UNITS + ' шт в когорте (новые и редкие) — берутся коэффициенты кабинета, тариф при этом свой ' +
      '(колонка «Коэффициенты по» = «кабинет», подробности — лист «' + YOP_SH.coef + '»).'], [''],
     ['Налог'],
@@ -1362,15 +1450,19 @@ function yopWriteHelp_() {
      'колонки O (до рекламы за показы, хранения, подписки и налога). «Судьба известна» — какая доля заказов дня уже доставлена ' +
      'или отменена: пока она меньше 100 %, факт ещё дорастёт. Каждый прогон обновляет факт по всем дням за последние 6 недель.'], [''],
     ['Юнитка на данных Маркета'],
-    ['Лист «' + YOP_SH.unit + '»: по каждому артикулу с заказами за 30 дней или с остатком — цена в кабинете и ставка буста СЕЙЧАС, ' +
-     'цена и ставка по факту заказов за 7 дней, остатки FBY и FBS (доступно), на сколько дней хватит, расходы Маркета на одну ' +
+    ['Лист «' + YOP_SH.unit + '»: по каждому артикулу с заказами за 30 дней или с остатком — цена в кабинете, ставка буста из последних ' +
+     'заказов, цена и ставка по факту заказов за 7 дней, цена на витрине с СПП и СПП (скидка Маркета) за 7 дней, остатки FBY и FBS (доступно), на сколько дней хватит, расходы Маркета на одну ' +
      'выкупленную штуку по тем же коэффициентам, что прогноз, себес, реклама за показы условно (доля от суммы заказов кабинета ' +
      'за 30 дней), налог 25 %, ЧП на штуку и в месяц.'],
     ['Сценарий: впишите «Ваша цена» и «Ваша ставка буста» — зелёные колонки сразу покажут расходы, маржу, ЧП на штуку и ' +
      'маржинальность при этих настройках. Пусто — считается по текущей цене и ставке из кабинета. Вписанное прогон не затирает; ' +
-     'ставку можно писать и «5%», и «5».'], [''],
+     'ставку можно писать и «5%», и «5».'],
+    ['Заметки 1–3 в конце листа — для своих пометок: прогон переносит их вместе с артикулом. Свои колонки справа от них ' +
+     'прогон стирает (лист пишется заново). Сортировать можно, порядок вернётся при следующем прогоне; фильтр прогон ' +
+     'снимает и ставит обратно.'], [''],
     ['Себестоимость'],
-    ['Сначала лист «' + YOP_SH.cogs + '» (кабинет | артикул магазина | себес), если там нет — юнитка кабинета по «Код 1С». ' +
+    ['Сначала лист «' + YOP_SH.cogs + '» (кабинет | артикул магазина | себес), если там нет — юнитка кабинета по «Код 1С» ' +
+     '(без учёта регистра и знаков на конце артикула). ' +
      'Колонка «Себес найден» показывает источник, «НЕТ — себес 0» — артикул, который надо добавить.'], [''],
     ['Смена тарифа комиссии'],
     ['Модель видит новый тариф в начислениях с задержкой 1–2 недели. Чтобы не ждать: лист «' + YOP_SH.settings + '», колонки ' +
@@ -1825,7 +1917,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     YOP: YOP, YOP_SH: YOP_SH, YOP_DAYS_HEAD: YOP_DAYS_HEAD, YOP_DETAIL_HEAD: YOP_DETAIL_HEAD, YOP_UNIT_HEAD: YOP_UNIT_HEAD,
     yopAddDays_: yopAddDays_, yopItems_: yopItems_, yopForecast_: yopForecast_, yopCoefficients_: yopCoefficients_,
-    yopFactDay_: yopFactDay_, yopUnitRows_: yopUnitRows_, yopBidNow_: yopBidNow_, yopFilterTake_: yopFilterTake_, yopFilterPut_: yopFilterPut_, yopUnitCalc_: yopUnitCalc_, yopManualTariff_: yopManualTariff_,
+    yopFactDay_: yopFactDay_, yopUnitRows_: yopUnitRows_, yopBidNow_: yopBidNow_, yopCogsOf_: yopCogsOf_, yopSkuNorm_: yopSkuNorm_, yopTariffs_: yopTariffs_, yopFilterTake_: yopFilterTake_, yopFilterPut_: yopFilterPut_, yopUnitCalc_: yopUnitCalc_, yopManualTariff_: yopManualTariff_,
     yopSettings_: yopSettings_, yopKeys_: yopKeys_, yopCogs_: yopCogs_, yopCogsValues_: yopCogsValues_, yopCogsFormula_: yopCogsFormula_,
     yopAddServices_: yopAddServices_, yopOrderRecord_: yopOrderRecord_, yopCollectCabinet_: yopCollectCabinet_,
     yopCollectUnitData_: yopCollectUnitData_, yopWriteDay_: yopWriteDay_, yopWriteUnit_: yopWriteUnit_,

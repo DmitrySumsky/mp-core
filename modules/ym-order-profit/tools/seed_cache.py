@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — ЗАСЕВ КЭША ДЛЯ КНИГИ v1.0.0 — 22.09.2026
+ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — ЗАСЕВ КЭША ДЛЯ КНИГИ v1.1.0 — 23.09.2026
+
+v1.1.0 — 23.09.2026
+  НАДБАВКА ЗА ПРОСРОЧКУ FBS И СКИДКА МАРКЕТА — вопросы менеджера ЯМ по юнитке (центральный код v2.2.0).
+  • размещение: qualityIndexAmount (надбавка за просрочку отгрузки FBS) — в статью «прочее» заказа;
+  • запись позиции заказа: шестым полем скидка Маркета на штуку (prices[] MARKETPLACE) — для СПП в юнитке.
 
 v1.0.0 — 22.09.2026
   СКРИПТ КНИГИ НЕ УСПЕЕТ СКАЧАТЬ 35 ДНЕЙ ИСТОРИИ ЗА ШЕСТЬ МИНУТ — перенос модели в Apps Script.
@@ -55,7 +60,8 @@ def order_item(o, it):
         if st in DELIVERED and det.get("itemStatus") in ("REJECTED", "RETURNED"):
             deliv -= int(det.get("itemCount") or 0)
     price = sum(num(p.get("costPerItem")) for p in it.get("prices") or [])
-    return [it.get("shopSku") or "", n, round(price, 2), num(it.get("bidFee")) / 10000, max(deliv, 0)]
+    spp = sum(num(p.get("costPerItem")) for p in it.get("prices") or [] if p.get("type") == "MARKETPLACE")
+    return [it.get("shopSku") or "", n, round(price, 2), num(it.get("bidFee")) / 10000, max(deliv, 0), round(spp, 2)]
 
 
 def add_services(cache, zpath):
@@ -75,6 +81,8 @@ def add_services(cache, zpath):
                 key = f"{r['orderId']}|{sku}"
                 slot = cache["svc"].setdefault(key, {})
                 slot[kind] = round(slot.get(kind, 0) + val, 2)
+                if name == "placement.json" and num(r.get("qualityIndexAmount")):
+                    slot["прочее"] = round(slot.get("прочее", 0) + num(r.get("qualityIndexAmount")), 2)
                 if name == "placement.json" and r.get("tariff") is not None and r.get("orderCreationDateTime"):
                     cache["tariffs"][f"{str(r['orderCreationDateTime'])[:10]}|{r.get('shopSku') or ''}"] = float(r["tariff"])
             else:

@@ -93,14 +93,38 @@ function yopCogs_(cab) {
       if (String(r[0]).trim() === cab.name && sku && isFinite(v)) map[sku] = { v: v, src: 'вручную' };
     });
   }
-  return { map: map, unit: unit ? { name: unit.name, kc: unit.kc, cc: unit.cc } : null };
+  var norm = {};
+  Object.keys(map).forEach(function (k) { norm[yopSkuNorm_(k)] = map[k]; });
+  return { map: map, norm: norm, unit: unit ? { name: unit.name, kc: unit.kc, cc: unit.cc } : null };
 }
 
-/** { артикул: ₽ } — для модели. */
+/**
+ * v2.2.0. Артикул для сверки с юниткой: без регистра и без хвостовых пробелов и знаков препинания. В кабинетах
+ * «ABC …» против «abc …» в юнитке, «X-z120» против «X-Z120», в Маркете бывает артикул с запятой на конце —
+ * себес не находился, хотя в юнитке он есть. Формула листа (VLOOKUP) регистр и так не различает.
+ */
+function yopSkuNorm_(s) {
+  return String(s == null ? '' : s).trim().toLowerCase().replace(/[\s,.;]+$/, '');
+}
+
+/** Запись себеса артикула: точное совпадение, иначе — по нормализованному артикулу. */
+function yopCogsEntry_(cogs, sku) {
+  return cogs.map[sku] || (cogs.norm && cogs.norm[yopSkuNorm_(sku)]) || null;
+}
+
+/** { артикул: ₽ } — для модели; нормализованные артикулы — с префиксом «≈» (их читает yopCogsOf_). */
 function yopCogsValues_(cogs) {
   var out = {};
   Object.keys(cogs.map).forEach(function (k) { out[k] = cogs.map[k].v; });
+  Object.keys(cogs.norm || {}).forEach(function (k) { out['≈' + k] = cogs.norm[k].v; });
   return out;
+}
+
+/** v2.2.0. Себес артикула из yopCogsValues_: точно, иначе по нормализованному артикулу; нет — null. */
+function yopCogsOf_(values, sku) {
+  if (values.hasOwnProperty(sku)) return values[sku];
+  var n = '≈' + yopSkuNorm_(sku);
+  return values.hasOwnProperty(n) ? values[n] : null;
 }
 
 /**
@@ -113,7 +137,8 @@ function yopCogsFormula_(cogs, cabCell, skuCell) {
   var fromManual = 'SUMIFS(' + m + '$C:$C,' + m + '$A:$A,' + cabCell + ',' + m + '$B:$B,' + skuCell + ')';
   var fromUnit = '0';
   if (cogs.unit) {
-    fromUnit = "IFERROR(VLOOKUP(" + skuCell + ",'" + cogs.unit.name + "'!$" + yopCol_(cogs.unit.kc + 1) + ':$' +
+    // v2.2.0: артикул без хвостовых пробелов и знаков («…90 caps,» в Маркете); регистр VLOOKUP не различает
+    fromUnit = 'IFERROR(VLOOKUP(REGEXREPLACE(TRIM(' + skuCell + '&""),"[\\s,.;]+$",""),\'' + cogs.unit.name + "'!$" + yopCol_(cogs.unit.kc + 1) + ':$' +
       yopCol_(cogs.unit.cc + 1) + ',' + (cogs.unit.cc - cogs.unit.kc + 1) + ',FALSE),0)';
   }
   return '=IF(' + manual + ',' + fromManual + ',' + fromUnit + ')';
