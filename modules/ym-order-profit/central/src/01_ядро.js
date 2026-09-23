@@ -1,6 +1,6 @@
 /* ЯДРО: имена листов, даты, журнал событий. */
 
-var YOP_VERSION = 'v2.1.1';
+var YOP_VERSION = 'v2.1.2';
 var YOP_TIME_LIMIT_MS = 4.5 * 60 * 1000;   // этап очереди: дальше — продолжение новым запуском
 var YOP_START_LIMIT_MS = 2.5 * 60 * 1000;  // новый кусок сбора начинается, только если прошло меньше
 var YOP_STALE_MS = 30 * 60 * 1000;         // очередь молчит дольше — считается зависшей
@@ -64,6 +64,31 @@ function yopHeader_(sh, head, widths) {
     .setVerticalAlignment('middle').setBackground('#e8f0fe');
   sh.setFrozenRows(YOP_HEAD_ROW);
   for (var i = 1; i <= head.length; i++) sh.setColumnWidth(i, (widths && widths[i]) || 110);
+}
+
+/**
+ * v2.1.2. Обычный фильтр на перезаписываемом листе. Лист очищается и пишется заново, а фильтр при этом остаётся
+ * и держит скрытыми те же строки, что до прогона, — уже с чужими данными; в скрытые строки формулы юнитки
+ * не легли (23.09: фильтр по одному кабинету — у остальных кабинетов пусто). Поэтому перед записью фильтр снимается
+ * с запоминанием условий, после записи ставится заново на весь новый диапазон — и применяется к свежим данным.
+ */
+function yopFilterTake_(sh) {
+  var f = sh.getFilter && sh.getFilter();
+  if (!f) return null;
+  var r = f.getRange(), crit = {};
+  for (var c = r.getColumn(); c <= r.getLastColumn(); c++) {
+    var k = f.getColumnFilterCriteria(c);
+    if (k) crit[c] = k.copy().build();
+  }
+  f.remove();
+  return crit;
+}
+
+function yopFilterPut_(sh, crit, nCols) {
+  if (!crit) return;
+  var n = Math.max(sh.getLastRow() - YOP_HEAD_ROW + 1, 2);
+  var f = sh.getRange(YOP_HEAD_ROW, 1, n, nCols).createFilter();
+  Object.keys(crit).forEach(function (c) { if (Number(c) <= nCols) f.setColumnFilterCriteria(Number(c), crit[c]); });
 }
 
 function yopTitle_(sh, title, note) {

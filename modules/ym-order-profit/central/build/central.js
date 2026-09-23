@@ -1,4 +1,4 @@
-/* ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — ЦЕНТРАЛЬНЫЙ КОД v2.1.1 — 22.09.2026 */
+/* ЧП ПО ЗАКАЗАМ ЯНДЕКС МАРКЕТА — ЦЕНТРАЛЬНЫЙ КОД v2.1.2 — 23.09.2026 */
 /*
  * Что делает: каждое утро считает, сколько в итоге принесут заказы ВЧЕРАШНЕГО дня по каждому
  * кабинету Маркета, ведёт историю по дням с фактом рядом с прогнозом и собирает юнитку на данных
@@ -14,6 +14,20 @@
  *   07_пульт.js     — «Как работать», «Что сейчас происходит», «Проверка связи», миграция листов
  *
  * ИСТОРИЯ ВЕРСИЙ (новая сверху)
+ *
+ * v2.1.2 — 23.09.2026
+ *   В ЮНИТКЕ «БУСТЫ НЕ ПОДТЯНУЛИСЬ» И ПРОПАЛИ ФОРМУЛЫ У ВСЕХ КАБИНЕТОВ, КРОМЕ ОДНОГО — менеджер ЯМ, 23.09.2026.
+ *   1) «Ставка буста сейчас» стояла 0 у всех: bids/info отдаёт только ставки, выставленные через API, — у кабинетов
+ *      там старые артикулы (у крупного кабинета 33 шт., в каталоге их нет), ставки из кабинета он не видит. Ноль
+ *      при этом не пустой, и сценарий брал буст 0 % — маржа завышалась.
+ *   2) На листе стоял обычный фильтр по одному кабинету: лист очищается и пишется заново, фильтр остаётся и прячет те же
+ *      строки, а в скрытые строки формулы не легли — у остальных кабинетов пустые расходы и ЧП.
+ *   • ставка «сейчас» — средняя bidFee по заказам последнего дня с заказами (не старше 7 дней): Маркет пишет в заказ
+ *     ставку, действовавшую в момент заказа; bids/info — запасной источник; нет ничего — пусто (сценарий берёт
+ *     среднюю за 7 дней); колонка переименована в «Ставка буста сейчас (последние заказы)»;
+ *   • «🧮 юнитка» и «🧾 по заказам»: перед записью обычный фильтр снимается с запоминанием условий, после записи
+ *     ставится заново на весь новый диапазон — фильтр применяется к свежим данным.
+ *   Тесты: 23/23.
  *
  * v2.1.1 — 22.09.2026
  *   СРЕДНЯЯ МИЛЯ «СО СКИДКОЙ» — 4–21 ₽ НА ШТУКУ ВМЕСТО ~92 — вопрос менеджера ЯМ по юнитке, 22.09.2026.
@@ -89,7 +103,7 @@
 
 /* ЯДРО: имена листов, даты, журнал событий. */
 
-var YOP_VERSION = 'v2.1.1';
+var YOP_VERSION = 'v2.1.2';
 var YOP_TIME_LIMIT_MS = 4.5 * 60 * 1000;   // этап очереди: дальше — продолжение новым запуском
 var YOP_START_LIMIT_MS = 2.5 * 60 * 1000;  // новый кусок сбора начинается, только если прошло меньше
 var YOP_STALE_MS = 30 * 60 * 1000;         // очередь молчит дольше — считается зависшей
@@ -153,6 +167,31 @@ function yopHeader_(sh, head, widths) {
     .setVerticalAlignment('middle').setBackground('#e8f0fe');
   sh.setFrozenRows(YOP_HEAD_ROW);
   for (var i = 1; i <= head.length; i++) sh.setColumnWidth(i, (widths && widths[i]) || 110);
+}
+
+/**
+ * v2.1.2. Обычный фильтр на перезаписываемом листе. Лист очищается и пишется заново, а фильтр при этом остаётся
+ * и держит скрытыми те же строки, что до прогона, — уже с чужими данными; в скрытые строки формулы юнитки
+ * не легли (23.09: фильтр по одному кабинету — у остальных кабинетов пусто). Поэтому перед записью фильтр снимается
+ * с запоминанием условий, после записи ставится заново на весь новый диапазон — и применяется к свежим данным.
+ */
+function yopFilterTake_(sh) {
+  var f = sh.getFilter && sh.getFilter();
+  if (!f) return null;
+  var r = f.getRange(), crit = {};
+  for (var c = r.getColumn(); c <= r.getLastColumn(); c++) {
+    var k = f.getColumnFilterCriteria(c);
+    if (k) crit[c] = k.copy().build();
+  }
+  f.remove();
+  return crit;
+}
+
+function yopFilterPut_(sh, crit, nCols) {
+  if (!crit) return;
+  var n = Math.max(sh.getLastRow() - YOP_HEAD_ROW + 1, 2);
+  var f = sh.getRange(YOP_HEAD_ROW, 1, n, nCols).createFilter();
+  Object.keys(crit).forEach(function (c) { if (Number(c) <= nCols) f.setColumnFilterCriteria(Number(c), crit[c]); });
 }
 
 function yopTitle_(sh, title, note) {
@@ -840,10 +879,12 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
   var acc = {}, gmv30 = 0, shows = 0;
   flat.items.forEach(function (it) {
     if (it.day < lo30 || it.day > day) return;
-    var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0 });
+    var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, lastDay: '', lastGmv: 0, lastBidGmv: 0 });
     a.n30 += it.n;
     gmv30 += it.price * it.n;
     if (it.day >= lo7) { a.n7 += it.n; a.gmv7 += it.price * it.n; a.bidgmv7 += it.price * it.n * it.bid; }
+    if (it.day > a.lastDay) { a.lastDay = it.day; a.lastGmv = 0; a.lastBidGmv = 0; }
+    if (it.day === a.lastDay) { a.lastGmv += it.price * it.n; a.lastBidGmv += it.price * it.n * it.bid; }
   });
   Object.keys(cache.dayCost).forEach(function (d) {
     if (d >= lo30 && d <= day) shows += cache.dayCost[d]['показы'] || 0;
@@ -862,12 +903,24 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
       priceCab: o.price || null, price7: price7, price: price7 || o.price || 0,
       n30: a.n30, fby: (st.fby || {})[s] || 0, fbs: (st.fbs || {})[s] || 0,
       bid: a.gmv7 ? a.bidgmv7 / a.gmv7 : 0, drr: drr,
-      bidNow: unitData && unitData.bids ? unitData.bids[s] || 0 : null,
+      bidNow: yopBidNow_(acc[s], lo7, unitData && unitData.bids, s),
       coef: p.c, src: p.src, cogs: cogs.hasOwnProperty(s) ? cogs[s] : null
     };
   });
   rows.sort(function (x, y) { return y.n30 - x.n30 || y.fby + y.fbs - x.fby - x.fbs; });
   return { rows: rows, drr: drr, shows: shows, gmv30: gmv30 };
+}
+
+/**
+ * v2.1.2. Ставка буста «сейчас»: средняя по заказам последнего дня с заказами (не старше 7 дней) — Маркет
+ * пишет в заказ ставку, действовавшую в момент заказа. bids/info отдаёт только ставки, выставленные через API
+ * (у кабинетов там старые артикулы, которых нет в каталоге), поэтому он — лишь запасной источник.
+ * Нет ни того, ни другого — пусто, и сценарий берёт среднюю за 7 дней.
+ */
+function yopBidNow_(a, lo7, apiBids, sku) {
+  if (a && a.lastDay >= lo7 && a.lastGmv) return a.lastBidGmv / a.lastGmv;
+  if (apiBids && apiBids.hasOwnProperty(sku)) return apiBids[sku];
+  return null;
 }
 
 /**
@@ -949,6 +1002,7 @@ function yopWriteDetail_(day, all) {
       r++;
     });
   });
+  var flt = yopFilterTake_(sh);
   sh.clear();
   yopTitle_(sh, 'ЧП по заказам за ' + yopRu_(day) + ' — прогноз по истории своих заказов (' + YOP_VERSION + ')',
     'Лист перезаписывается каждым прогоном. Синие колонки G–O — коэффициенты модели: их можно поменять руками, ' +
@@ -965,6 +1019,7 @@ function yopWriteDetail_(day, all) {
     sh.getRange(R, 29, n, 1).setNumberFormat('0.0%');
     sh.getRange(R, 7, n, 9).setBackground(YOP_BLUE);
   }
+  yopFilterPut_(sh, flt, YOP_DETAIL_HEAD.length);
   return rows.length;
 }
 
@@ -1122,7 +1177,7 @@ var YOP_UNIT_SPEC = [
   ['status', 'Статус на Маркете', '', '', '', function (x) { return x.status; }],
   ['priceNow', 'Цена в кабинете сейчас, ₽', 'Карточка и остатки', 'rub', '', function (x) { return x.priceCab || ''; }],
   ['price7', 'Цена продажи ср. за 7 дн (факт), ₽', '', 'rub', '', function (x) { return x.price7 == null ? '' : Math.round(x.price7); }],
-  ['bidNow', 'Ставка буста сейчас', '', 'pct', '', function (x) { return x.bidNow == null ? '' : x.bidNow; }],
+  ['bidNow', 'Ставка буста сейчас (последние заказы)', '', 'pct', '', function (x) { return x.bidNow == null ? '' : x.bidNow; }],
   ['bid7', 'Ставка буста ср. за 7 дн (факт)', '', 'pct', '', function (x) { return x.bid; }],
   ['n30', 'Заказано за 30 дн, шт', '', 'int', '', function (x) { return x.n30; }],
   ['perDay', 'Заказов в день, шт', '', 'num1', '', function (x, L) { return '=' + L('n30') + '/' + YOP.UNIT_DAYS; }],
@@ -1219,10 +1274,11 @@ function yopWriteUnit_(day, all) {
       r++;
     });
   });
+  var flt = yopFilterTake_(sh);
   sh.clear();
   yopTitle_(sh, 'Юнитка ЯМ на данных Маркета на ' + yopRu_(day) + ' — экономика одной выкупленной штуки (' + YOP_VERSION + ')',
     'Сценарий: впишите «Ваша цена» и «Ваша ставка буста» — зелёные колонки сразу покажут маржу и ЧП на штуку; пусто — по текущей ' +
-    'цене в кабинете и текущей ставке буста. Вписанное прогон не затирает. Факт — цена и ставка из заказов за 7 дней. ' +
+    'цене в кабинете и ставке буста из последних заказов. Вписанное прогон не затирает. Факт — цена и ставка из заказов за 7 дней. ' +
     'Расходы Маркета — факт удержаний по дозревшим заказам; реклама за показы делится условно. ' + info.join('; ') + '.');
   sh.getRange(3, 1, 1, YOP_UNIT_SPEC.length).setValues([YOP_UNIT_SPEC.map(function (c) { return c[2]; })]).setFontWeight('bold');
   yopHeader_(sh, YOP_UNIT_HEAD, { 1: 130, 2: 220, 3: 320, 4: 160 });
@@ -1237,6 +1293,7 @@ function yopWriteUnit_(day, all) {
     });
   }
   sh.setFrozenColumns(2);
+  yopFilterPut_(sh, flt, YOP_UNIT_SPEC.length);
   return rows.length;
 }
 
@@ -1768,7 +1825,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     YOP: YOP, YOP_SH: YOP_SH, YOP_DAYS_HEAD: YOP_DAYS_HEAD, YOP_DETAIL_HEAD: YOP_DETAIL_HEAD, YOP_UNIT_HEAD: YOP_UNIT_HEAD,
     yopAddDays_: yopAddDays_, yopItems_: yopItems_, yopForecast_: yopForecast_, yopCoefficients_: yopCoefficients_,
-    yopFactDay_: yopFactDay_, yopUnitRows_: yopUnitRows_, yopUnitCalc_: yopUnitCalc_, yopManualTariff_: yopManualTariff_,
+    yopFactDay_: yopFactDay_, yopUnitRows_: yopUnitRows_, yopBidNow_: yopBidNow_, yopFilterTake_: yopFilterTake_, yopFilterPut_: yopFilterPut_, yopUnitCalc_: yopUnitCalc_, yopManualTariff_: yopManualTariff_,
     yopSettings_: yopSettings_, yopKeys_: yopKeys_, yopCogs_: yopCogs_, yopCogsValues_: yopCogsValues_, yopCogsFormula_: yopCogsFormula_,
     yopAddServices_: yopAddServices_, yopOrderRecord_: yopOrderRecord_, yopCollectCabinet_: yopCollectCabinet_,
     yopCollectUnitData_: yopCollectUnitData_, yopWriteDay_: yopWriteDay_, yopWriteUnit_: yopWriteUnit_,

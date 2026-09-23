@@ -216,10 +216,12 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
   var acc = {}, gmv30 = 0, shows = 0;
   flat.items.forEach(function (it) {
     if (it.day < lo30 || it.day > day) return;
-    var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0 });
+    var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, lastDay: '', lastGmv: 0, lastBidGmv: 0 });
     a.n30 += it.n;
     gmv30 += it.price * it.n;
     if (it.day >= lo7) { a.n7 += it.n; a.gmv7 += it.price * it.n; a.bidgmv7 += it.price * it.n * it.bid; }
+    if (it.day > a.lastDay) { a.lastDay = it.day; a.lastGmv = 0; a.lastBidGmv = 0; }
+    if (it.day === a.lastDay) { a.lastGmv += it.price * it.n; a.lastBidGmv += it.price * it.n * it.bid; }
   });
   Object.keys(cache.dayCost).forEach(function (d) {
     if (d >= lo30 && d <= day) shows += cache.dayCost[d]['показы'] || 0;
@@ -238,12 +240,24 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
       priceCab: o.price || null, price7: price7, price: price7 || o.price || 0,
       n30: a.n30, fby: (st.fby || {})[s] || 0, fbs: (st.fbs || {})[s] || 0,
       bid: a.gmv7 ? a.bidgmv7 / a.gmv7 : 0, drr: drr,
-      bidNow: unitData && unitData.bids ? unitData.bids[s] || 0 : null,
+      bidNow: yopBidNow_(acc[s], lo7, unitData && unitData.bids, s),
       coef: p.c, src: p.src, cogs: cogs.hasOwnProperty(s) ? cogs[s] : null
     };
   });
   rows.sort(function (x, y) { return y.n30 - x.n30 || y.fby + y.fbs - x.fby - x.fbs; });
   return { rows: rows, drr: drr, shows: shows, gmv30: gmv30 };
+}
+
+/**
+ * v2.1.2. Ставка буста «сейчас»: средняя по заказам последнего дня с заказами (не старше 7 дней) — Маркет
+ * пишет в заказ ставку, действовавшую в момент заказа. bids/info отдаёт только ставки, выставленные через API
+ * (у кабинетов там старые артикулы, которых нет в каталоге), поэтому он — лишь запасной источник.
+ * Нет ни того, ни другого — пусто, и сценарий берёт среднюю за 7 дней.
+ */
+function yopBidNow_(a, lo7, apiBids, sku) {
+  if (a && a.lastDay >= lo7 && a.lastGmv) return a.lastBidGmv / a.lastGmv;
+  if (apiBids && apiBids.hasOwnProperty(sku)) return apiBids[sku];
+  return null;
 }
 
 /**

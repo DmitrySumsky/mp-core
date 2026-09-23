@@ -207,15 +207,38 @@ t('«📈 по дням»: 21 день, вчера сверху формулам
 });
 
 const U = (s, r, h) => s.get(r, C.YOP_UNIT_HEAD.indexOf(h) + 1);
-t('«🧮 юнитка»: цена и ставка буста сейчас из Маркета, остатки, факт и сценарий формулами', () => {
+t('«🧮 юнитка»: цена из Маркета, ставка буста из последних заказов, остатки, факт и сценарий формулами', () => {
   const s = env.ss.getSheetByName(C.YOP_SH.unit);
   eq(s.rows[4].length, C.YOP_UNIT_HEAD.length, 'колонок');
   eq(U(s, 5, 'Кабинет'), 'Кабинет-А'); eq(U(s, 5, 'Артикул'), 'A'); eq(U(s, 5, 'Наименование'), 'Товар А');
-  eq(U(s, 5, 'Цена в кабинете сейчас, ₽'), 1100); eq(U(s, 5, 'Ставка буста сейчас'), 0.1, 'bid 1000 = 10 %');
+  eq(U(s, 5, 'Цена в кабинете сейчас, ₽'), 1100); eq(U(s, 5, 'Ставка буста сейчас (последние заказы)'), 0.2, 'bidFee 2000 в заказе дня D = 20 %, а не 10 % из bids/info');
   eq(U(s, 5, 'Остаток FBY (доступно), шт'), 40); eq(U(s, 5, 'Себес найден'), 'юнитка');
   ok(/^=IF\(\w+5="",IF\(\w+5="",\w+5,\w+5\),\w+5\)$/.test(U(s, 5, 'Цена в сценарии, ₽')), U(s, 5, 'Цена в сценарии, ₽'));
   ok(String(U(s, 5, 'ЧП на штуку (сценарий), ₽')).indexOf('*25/100') > 0, 'налог 25 % в сценарии');
   eq(s.get(3, C.YOP_UNIT_HEAD.indexOf('Ваша цена, ₽') + 1).indexOf('Сценарий'), 0, 'надпись над блоком');
+});
+
+t('ставка буста сейчас: последний день заказов, иначе bids/info, иначе пусто', () => {
+  const lo7 = add(D, -6);
+  near(C.yopBidNow_({ lastDay: D, lastGmv: 3000, lastBidGmv: 3000 * 0.12 }, lo7, { A: 0.3 }, 'A'), 0.12, 'заказы важнее bids/info');
+  eq(C.yopBidNow_({ lastDay: add(D, -20), lastGmv: 1000, lastBidGmv: 200 }, lo7, { A: 0.3 }, 'A'), 0.3, 'заказ старше 7 дней — bids/info');
+  eq(C.yopBidNow_(undefined, lo7, { B: 0.3 }, 'A'), null, 'ничего нет — пусто, сценарий возьмёт среднюю за 7 дней');
+});
+
+t('фильтр на листе: снимается перед записью, ставится заново на новый диапазон с теми же условиями', () => {
+  const log = [];
+  const crit = { copy: () => ({ build: () => 'Кабинет-А' }) };
+  const filter = { getRange: () => ({ getColumn: () => 1, getLastColumn: () => 3 }),
+    getColumnFilterCriteria: c => (c === 1 ? crit : null), remove: () => log.push('remove') };
+  const sh = { getFilter: () => filter, getLastRow: () => 50,
+    getRange: (r, c, n, w) => ({ createFilter: () => { log.push('create ' + [r, c, n, w].join(',')); return {
+      setColumnFilterCriteria: (col, k) => log.push('crit ' + col + '=' + k) }; } }) };
+  const saved = C.yopFilterTake_(sh);
+  eq(JSON.stringify(saved), '{"1":"Кабинет-А"}'); eq(log[0], 'remove');
+  C.yopFilterPut_(sh, saved, 53);
+  eq(log[1], 'create ' + [4, 1, 47, 53].join(','));
+  eq(log[2], 'crit 1=Кабинет-А');
+  eq(C.yopFilterTake_({}), null, 'нет фильтра — ничего не делаем');
 });
 
 t('сценарий: «Ваша цена» и «Ваша ставка» переживают прогон; формула сценария = расчёт модели', () => {

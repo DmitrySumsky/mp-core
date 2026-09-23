@@ -57,6 +57,7 @@ function yopWriteDetail_(day, all) {
       r++;
     });
   });
+  var flt = yopFilterTake_(sh);
   sh.clear();
   yopTitle_(sh, 'ЧП по заказам за ' + yopRu_(day) + ' — прогноз по истории своих заказов (' + YOP_VERSION + ')',
     'Лист перезаписывается каждым прогоном. Синие колонки G–O — коэффициенты модели: их можно поменять руками, ' +
@@ -73,6 +74,7 @@ function yopWriteDetail_(day, all) {
     sh.getRange(R, 29, n, 1).setNumberFormat('0.0%');
     sh.getRange(R, 7, n, 9).setBackground(YOP_BLUE);
   }
+  yopFilterPut_(sh, flt, YOP_DETAIL_HEAD.length);
   return rows.length;
 }
 
@@ -230,7 +232,7 @@ var YOP_UNIT_SPEC = [
   ['status', 'Статус на Маркете', '', '', '', function (x) { return x.status; }],
   ['priceNow', 'Цена в кабинете сейчас, ₽', 'Карточка и остатки', 'rub', '', function (x) { return x.priceCab || ''; }],
   ['price7', 'Цена продажи ср. за 7 дн (факт), ₽', '', 'rub', '', function (x) { return x.price7 == null ? '' : Math.round(x.price7); }],
-  ['bidNow', 'Ставка буста сейчас', '', 'pct', '', function (x) { return x.bidNow == null ? '' : x.bidNow; }],
+  ['bidNow', 'Ставка буста сейчас (последние заказы)', '', 'pct', '', function (x) { return x.bidNow == null ? '' : x.bidNow; }],
   ['bid7', 'Ставка буста ср. за 7 дн (факт)', '', 'pct', '', function (x) { return x.bid; }],
   ['n30', 'Заказано за 30 дн, шт', '', 'int', '', function (x) { return x.n30; }],
   ['perDay', 'Заказов в день, шт', '', 'num1', '', function (x, L) { return '=' + L('n30') + '/' + YOP.UNIT_DAYS; }],
@@ -327,10 +329,11 @@ function yopWriteUnit_(day, all) {
       r++;
     });
   });
+  var flt = yopFilterTake_(sh);
   sh.clear();
   yopTitle_(sh, 'Юнитка ЯМ на данных Маркета на ' + yopRu_(day) + ' — экономика одной выкупленной штуки (' + YOP_VERSION + ')',
     'Сценарий: впишите «Ваша цена» и «Ваша ставка буста» — зелёные колонки сразу покажут маржу и ЧП на штуку; пусто — по текущей ' +
-    'цене в кабинете и текущей ставке буста. Вписанное прогон не затирает. Факт — цена и ставка из заказов за 7 дней. ' +
+    'цене в кабинете и ставке буста из последних заказов. Вписанное прогон не затирает. Факт — цена и ставка из заказов за 7 дней. ' +
     'Расходы Маркета — факт удержаний по дозревшим заказам; реклама за показы делится условно. ' + info.join('; ') + '.');
   sh.getRange(3, 1, 1, YOP_UNIT_SPEC.length).setValues([YOP_UNIT_SPEC.map(function (c) { return c[2]; })]).setFontWeight('bold');
   yopHeader_(sh, YOP_UNIT_HEAD, { 1: 130, 2: 220, 3: 320, 4: 160 });
@@ -345,6 +348,7 @@ function yopWriteUnit_(day, all) {
     });
   }
   sh.setFrozenColumns(2);
+  yopFilterPut_(sh, flt, YOP_UNIT_SPEC.length);
   return rows.length;
 }
 
