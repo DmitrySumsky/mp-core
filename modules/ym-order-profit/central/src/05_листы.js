@@ -472,11 +472,14 @@ function yopWriteDay_(day, all) {
   all = all || yopForecastAll_(day);
   var cur = SpreadsheetApp.getActive().getSheetByName(YOP_SH.days);
   if (!yopDaysLayoutOk_(cur)) return yopRebuildDays_(day, YOP_REBUILD_DAYS, all);
+  // v2.2.1: сначала заморозить историю — блок прошлого дня стоит формулами от листа «по заказам», и если
+  // сперва перезаписать тот лист новым днём, прошлый день застынет с цифрами нового (22.09 → цифры 23.09)
+  var sh = yopDaysSheet_();
+  yopFreezeAndDrop_(sh, day);
+  SpreadsheetApp.flush();
   var n = yopWriteDetail_(day, all);
   yopWriteCoef_(day, all);
   yopWriteHelp_();
-  var sh = yopDaysSheet_();
-  yopFreezeAndDrop_(sh, day);
   yopInsertBlock_(sh, yopDayBlock_(day, all, YOP_HEAD_ROW + 1, true, YOP_HEAD_ROW + Math.max(n, 1)));
   var f = yopUpdateFacts_(sh, all, day);
   SpreadsheetApp.flush();

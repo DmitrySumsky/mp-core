@@ -244,6 +244,16 @@ t('«📈 по дням»: 21 день, вчера сверху формулам
   eq(s.get(5, 24), '', 'вчера — факта ещё нет');
 });
 
+t('v2.2.1: новый день — история замораживается ДО перезаписи листа «по заказам» (22.09 не должен стать 23.09)', () => {
+  const days = env.ss.getSheetByName(C.YOP_SH.days), detail = env.ss.getSheetByName(C.YOP_SH.detail);
+  const R = Object.getPrototypeOf(days.getRange(1, 1)), setV = R.setValues, getV = R.getValues, log = [];
+  R.setValues = function (v) { log.push('set ' + this.sh.name); return setV.call(this, v); };
+  R.getValues = function () { log.push('get ' + this.sh.name); return getV.call(this); };
+  try { C.yopWriteDay_(D); } finally { R.setValues = setV; R.getValues = getV; }
+  const freeze = log.indexOf('set ' + days.name), rewrite = log.indexOf('set ' + detail.name);
+  ok(freeze >= 0 && rewrite >= 0 && freeze < rewrite, 'заморозка «по дням» раньше записи «по заказам»: ' + log.slice(0, 8).join(' | '));
+});
+
 const U = (s, r, h) => s.get(r, C.YOP_UNIT_HEAD.indexOf(h) + 1);
 t('«🧮 юнитка»: цена из Маркета, ставка буста из последних заказов, остатки, факт и сценарий формулами', () => {
   const s = env.ss.getSheetByName(C.YOP_SH.unit);
