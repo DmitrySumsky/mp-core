@@ -227,11 +227,13 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
   flat.items.forEach(function (it) {
     if (it.day < lo30 || it.day > day) return;
     var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, lastDay: '', lastGmv: 0, lastBidGmv: 0,
-      sppN: 0, sppGmv: 0, spp: 0 });
+      sppN: 0, sppGmv: 0, spp: 0, gmv30: 0, bidgmv30: 0, sppN30: 0, sppGmv30: 0, spp30: 0 });
     a.n30 += it.n;
     gmv30 += it.price * it.n;
     if (it.day >= lo7) { a.n7 += it.n; a.gmv7 += it.price * it.n; a.bidgmv7 += it.price * it.n * it.bid; }
     if (it.day >= lo7 && it.spp != null) { a.sppN += it.n; a.sppGmv += it.price * it.n; a.spp += it.spp * it.n; }
+    a.gmv30 += it.price * it.n; a.bidgmv30 += it.price * it.n * it.bid;                  // v2.2.2: запасное окно 30 дней
+    if (it.spp != null) { a.sppN30 += it.n; a.sppGmv30 += it.price * it.n; a.spp30 += it.spp * it.n; }
     if (it.day > a.lastDay) { a.lastDay = it.day; a.lastGmv = 0; a.lastBidGmv = 0; }
     if (it.day === a.lastDay) { a.lastGmv += it.price * it.n; a.lastBidGmv += it.price * it.n * it.bid; }
   });
@@ -244,15 +246,20 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
   Object.keys(acc).forEach(function (s) { skus[s] = 1; });
   Object.keys(st.fby || {}).concat(Object.keys(st.fbs || {})).forEach(function (s) { skus[s] = 1; });
   var rows = Object.keys(skus).map(function (s) {
-    var a = acc[s] || { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, sppN: 0, sppGmv: 0, spp: 0 }, o = offers[s] || {}, p = yopPick_(coef, s);
-    var price7 = a.n7 ? a.gmv7 / a.n7 : null;
-    var shop7 = a.sppN ? (a.sppGmv - a.spp) / a.sppN : null, spp7 = a.sppGmv ? a.spp / a.sppGmv : null;
+    var a = acc[s] || { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, sppN: 0, sppGmv: 0, spp: 0, gmv30: 0, bidgmv30: 0, sppN30: 0, sppGmv30: 0,
+      spp30: 0 }, o = offers[s] || {}, p = yopPick_(coef, s);
+    // v2.2.2: за 7 дней заказов нет — цена, ставка буста и СПП по заказам за 30 дней (раньше ячейки стояли пустыми,
+    // и это выглядело как «не подтянулось»: у редких артикулов заказы бывают раз в две недели)
+    var w7 = a.n7 > 0, nW = w7 ? a.n7 : a.n30, gW = w7 ? a.gmv7 : a.gmv30, bW = w7 ? a.bidgmv7 : a.bidgmv30;
+    var sN = w7 ? a.sppN : a.sppN30, sG = w7 ? a.sppGmv : a.sppGmv30, sS = w7 ? a.spp : a.spp30;
+    var price7 = nW ? gW / nW : null;
+    var shop7 = sN ? (sG - sS) / sN : null, spp7 = sG ? sS / sG : null;
     return {
       sku: s, name: o.name || '', status: [o.fbyStatus ? 'FBY: ' + o.fbyStatus : '', o.fbsStatus ? 'FBS: ' + o.fbsStatus : '']
         .filter(String).join(', '),
       priceCab: o.price || null, price7: price7, price: price7 || o.price || 0, shop7: shop7, spp7: spp7,
       n30: a.n30, fby: (st.fby || {})[s] || 0, fbs: (st.fbs || {})[s] || 0,
-      bid: a.gmv7 ? a.bidgmv7 / a.gmv7 : 0, drr: drr,
+      bid: gW ? bW / gW : 0, drr: drr, factDays: w7 ? YOP.UNIT_PRICE_DAYS : (a.n30 ? YOP.UNIT_DAYS : null),
       bidNow: yopBidNow_(acc[s], lo7, unitData && unitData.bids, s),
       coef: p.c, src: p.src, cogs: yopCogsOf_(cogs, s)
     };

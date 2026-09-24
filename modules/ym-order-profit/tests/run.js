@@ -94,6 +94,14 @@ t('v2.2.0: скидка Маркета в записи заказа, цена н
   eq(C.yopUnitRows_(old, C.yopItems_(old), D, {}, null, null).rows[0].spp7, null, 'старая запись без скидки — пусто');
 });
 
+t('v2.2.2: за 7 дней заказов нет — цена, ставка и СПП по заказам за 30 дней', () => {
+  const o = marketOrder(960, add(D, -12), 'DELIVERED', 'R', 1, 1500);
+  const c = { orders: { 960: C.yopOrderRecord_(o) }, svc: {}, tariffs: {}, dayCost: {} };
+  const u = C.yopUnitRows_(c, C.yopItems_(c), D, {}, null, null).rows[0];
+  near(u.price7, 1000, 'цена за 30 дней'); near(u.bid, 0.15, 'ставка за 30 дней'); near(u.spp7, 0.5, 'СПП за 30 дней');
+  eq(u.factDays, 30); eq(u.bidNow, null, 'ставка «сейчас» — только по заказам недели');
+});
+
 t('тариф вручную действует с даты заказа, до неё — тариф из начислений', () => {
   near(C.yopForecast_(cache, D, { A: 100 }, flat, { tariff: 35, tariffFrom: add(D, -3) }).rows[0].комиссия, 1800 * 0.35, 'с даты');
   near(C.yopForecast_(cache, D, { A: 100 }, flat, { tariff: 35, tariffFrom: add(D, 3) }).rows[0].комиссия, 882, 'ещё не действует');

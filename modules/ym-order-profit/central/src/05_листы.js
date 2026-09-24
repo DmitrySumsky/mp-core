@@ -231,12 +231,12 @@ var YOP_UNIT_SPEC = [
   ['name', 'Наименование', '', '', '', function (x) { return x.name; }],
   ['status', 'Статус на Маркете', '', '', '', function (x) { return x.status; }],
   ['priceNow', 'Цена в кабинете сейчас, ₽', 'Карточка и остатки', 'rub', '', function (x) { return x.priceCab || ''; }],
-  ['price7', 'Цена продажи ср. за 7 дн (факт), ₽', '', 'rub', '', function (x) { return x.price7 == null ? '' : Math.round(x.price7); }],
+  ['price7', 'Цена продажи ср. за 7 дн (нет заказов — за 30), ₽', '', 'rub', '', function (x) { return x.price7 == null ? '' : Math.round(x.price7); }],
   ['bidNow', 'Ставка буста сейчас (последние заказы)', '', 'pct', '', function (x) { return x.bidNow == null ? '' : x.bidNow; }],
-  ['bid7', 'Ставка буста ср. за 7 дн (факт)', '', 'pct', '', function (x) { return x.bid; }],
+  ['bid7', 'Ставка буста ср. за 7 дн (нет заказов — за 30)', '', 'pct', '', function (x) { return x.bid; }],
   // v2.2.0: цена на витрине и СПП — из заказов: цена продавца минус скидка Маркета (MARKETPLACE)
-  ['shop7', 'Цена на витрине с СПП ср. за 7 дн, ₽', '', 'rub', '', function (x) { return x.shop7 == null ? '' : Math.round(x.shop7); }],
-  ['spp7', 'СПП (скидка Маркета) ср. за 7 дн', '', 'pct', '', function (x) { return x.spp7 == null ? '' : x.spp7; }],
+  ['shop7', 'Цена на витрине с СПП ср. за 7 дн (нет заказов — за 30), ₽', '', 'rub', '', function (x) { return x.shop7 == null ? '' : Math.round(x.shop7); }],
+  ['spp7', 'СПП (скидка Маркета) ср. за 7 дн (нет заказов — за 30)', '', 'pct', '', function (x) { return x.spp7 == null ? '' : x.spp7; }],
   ['n30', 'Заказано за 30 дн, шт', '', 'int', '', function (x) { return x.n30; }],
   ['perDay', 'Заказов в день, шт', '', 'num1', '', function (x, L) { return '=' + L('n30') + '/' + YOP.UNIT_DAYS; }],
   ['fby', 'Остаток FBY (доступно), шт', '', 'int', '', function (x) { return x.fby; }],
@@ -344,7 +344,8 @@ function yopWriteUnit_(day, all) {
   sh.clear();
   yopTitle_(sh, 'Юнитка ЯМ на данных Маркета на ' + yopRu_(day) + ' — экономика одной выкупленной штуки (' + YOP_VERSION + ')',
     'Сценарий: впишите «Ваша цена» и «Ваша ставка буста» — зелёные колонки сразу покажут маржу и ЧП на штуку; пусто — по текущей ' +
-    'цене в кабинете и ставке буста из последних заказов. Вписанное прогон не затирает. Факт — цена и ставка из заказов за 7 дней. ' +
+    'цене в кабинете и ставке буста из последних заказов. Вписанное прогон не затирает. Факт — цена и ставка из заказов за 7 дней, ' +
+    'нет заказов за неделю — за 30 дней. ' +
     'Расходы Маркета — факт удержаний по дозревшим заказам; реклама за показы делится условно. ' + info.join('; ') + '.');
   sh.getRange(3, 1, 1, YOP_UNIT_SPEC.length).setValues([YOP_UNIT_SPEC.map(function (c) { return c[2]; })]).setFontWeight('bold');
   yopHeader_(sh, YOP_UNIT_HEAD, { 1: 130, 2: 220, 3: 320, 4: 160 });
