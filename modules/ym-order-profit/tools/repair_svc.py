@@ -14,7 +14,7 @@ v1.0.0 — 25.09.2026
   Ключи — с листа «API-ключи» демо-книги (реестр demo_book), никуда не печатаются.
   Не запускать во время прогона книги (около 07:10 по Москве): книга перезапишет кэш своей копией.
 
-    python repair_svc.py --registry ../registry.local.json [--only NATURI] [--dry-run]
+    python repair_svc.py --registry ../registry.local.json [--only <кабинет>] [--dry-run]
 """
 from __future__ import annotations
 

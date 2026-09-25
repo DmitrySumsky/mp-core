@@ -239,7 +239,7 @@ t('себес: лист «вручную» главнее юнитки, арти
   const vals = C.yopCogsValues_(a);
   eq(C.yopCogsOf_(vals, 'A'), 100); eq(C.yopCogsOf_(vals, 'a ,'), 100, 'регистр и запятая на конце');
   eq(C.yopCogsOf_(vals, 'нет такого'), null);
-  eq(C.yopSkuNorm_("NATURI Men's Vitamins Forte 90 caps,"), "naturi men's vitamins forte 90 caps");
+  eq(C.yopSkuNorm_("Brand X Men's Vitamins Forte 90 caps,"), "brand x men's vitamins forte 90 caps");
 });
 
 t('1️⃣ полный прогон: кабинет без ключа пропущен, новый докачан кусками, листы записаны', () => {

@@ -12,7 +12,7 @@ v2.0.0 — 22.09.2026
     настройки таблицы» в меню — здесь, чтобы книга была готова до первого клика);
   • --hide <лист>: спрятать лист (не удалить).
 
-    python tools/seed_book.py --registry <реестр> --cogs-xlsx "HealthPro=hp.xlsx" --add-cabinet "Новый" --hide "Лист"
+    python tools/seed_book.py --registry <реестр> --cogs-xlsx "<кабинет>=каталог.xlsx" --add-cabinet "Новый" --hide "Лист"
 """
 import argparse
 import io
