@@ -126,7 +126,29 @@ t('юнитка: штука с заказами — факт цены за 7 д�
   const x = C.yopUnitCalc_(u.rows[0]);
   // на выкупленную штуку: комиссия 490, буст 1000 × 0,2 × 0,81 ÷ 0,9 = 180, себес 100, показы — доля кабинета ÷ выкуп
   near(x.расходы, 490 + 180, 'расходы Маркета'); near(x.показы, 1000 * (3000 / 52000) / 0.9, 'показы');
-  near(x.ЧП, (1000 - 670 - 100 - 1000 * (3000 / 52000) / 0.9) * 0.75, 'ЧП на штуку');
+  near(u.drrDay, 150 / 52000, 'v2.3.0: расходы дня (хранение 150) ÷ сумма заказов 30 дней');
+  near(x.расходыДня, 1000 * (150 / 52000) / 0.9, 'расходы дня на выкупленную штуку');
+  near(x.ЧП, (1000 - 670 - 100 - 1000 * (3000 / 52000) / 0.9 - 1000 * (150 / 52000) / 0.9) * 0.75, 'ЧП на штуку');
+});
+
+t('v2.3.0: перечитка дня начислений заменяет прочитанное, а не складывает; день без записи не перечитывается', () => {
+  const c = { orders: { 1: C.yopOrderRecord_(marketOrder(1, OLD, 'DELIVERED', 'A', 1)) }, svc: {}, tariffs: {}, dayCost: {}, svcDays: [], svcRecent: {} };
+  const X = add(D, -1);
+  // утром: комиссия пришла частью, мили ещё нет, хранения нет
+  C.yopAddServices_(c, { 'placement.json': [{ orderId: 1, shopSku: 'A', amountWithoutBonuses: 300, serviceDate: X }] }, { [X]: 1 }, X, X);
+  c.svcDays.push(X);
+  eq(c.svc['1|A'].комиссия, 300); eq(c.svcRecent[X]['1|A'].комиссия, 300, 'вклад дня запомнен');
+  // через день: полный день
+  C.yopUndoServiceDay_(c, X);
+  eq(c.svc['1|A'], undefined, 'вклад вычтен');
+  c.svcRecent[X] = {};
+  C.yopAddServices_(c, { 'placement.json': [{ orderId: 1, shopSku: 'A', amountWithoutBonuses: 490, serviceDate: X }],
+    'crossregional_delivery.json': [{ orderId: 1, shopSku: 'A', servicePrice: 1, netting: 91, serviceDate: X }],
+    'paid_storage_x.json': [{ paidStorage: 40, serviceDate: X }] }, { [X]: 1 }, X, X);
+  eq(c.svc['1|A'].комиссия, 490, 'комиссия заменена, не 790'); eq(c.svc['1|A'].миля, 92); eq(c.dayCost[X].хранение, 40);
+  const L = add(D, -2);
+  c.svcDays.push(L);                                                            // прочитан до v2.3.0 — записи нет
+  eq(C.yopSvcDaysToFetch_(c, add(D, -3), X, add(D, -3)).join(','), [add(D, -3), X].join(','), 'новый и перечитываемый; старый без записи — нет');
 });
 
 console.log('книга');
@@ -161,9 +183,17 @@ function market(orders, svc) {
         campaigns: [{ campaignId: 101, status: 'PUBLISHED' }] } }], paging: {} } });
     }
     if (url.indexOf('/offers/stocks') > 0) {
-      return gas.resp(200, { result: { warehouses: [{ offers: [{ offerId: 'A', stocks: [{ type: 'AVAILABLE', count: 40 }, { type: 'FIT', count: 45 }] }] }], paging: {} } });
+      return gas.resp(200, { result: { warehouses: [{ warehouseId: 172, offers: [{ offerId: 'A', stocks: [{ type: 'AVAILABLE', count: 40 }, { type: 'FIT', count: 45 }] }] },
+        { warehouseId: 501, offers: [{ offerId: 'A', stocks: [{ type: 'AVAILABLE', count: 3 }] }] },
+        { warehouseId: 300, offers: [{ offerId: 'A', stocks: [{ type: 'AVAILABLE', count: 7 }] }] }], paging: {} } });
     }
     if (url.indexOf('/bids/info') > 0) return gas.resp(200, { result: { bids: [{ sku: 'A', bid: 1000 }], paging: {} } });
+    if (/\/v2\/warehouses$/.test(url)) return gas.resp(200, { result: { warehouses: [{ id: 172, name: 'МО Софьино (кроме КГТ) - 1', address: { city: 'Софьино' } },
+      { id: 501, name: 'Яндекс.Маркет (Домодедово возвратный)', address: { city: 'Домодедово' } }, { id: 300, name: 'Екатеринбург', address: { city: 'Екатеринбург' } }] } });
+    if (url.indexOf('/offer-prices') > 0) return gas.resp(200, { result: { offers: [{ offerId: 'A', price: { value: 1100, minimumForBestseller: 990 } }], paging: {} } });
+    if (url.indexOf('/promos/offers') > 0) return gas.resp(200, { result: { offers: [{ offerId: 'A', status: 'AUTO',
+      params: { discountParams: { maxPromoPrice: 1050 } } }], paging: {} } });
+    if (url.indexOf('/promos') > 0) return gas.resp(200, { result: { promos: [{ id: 'p1', name: 'Бестселлеры' }] } });
     if (/\/campaigns\/\d+$/.test(url)) return gas.resp(opt.headers['Api-Key'] === 'k-a' ? 200 : 401, {});
     throw new Error('неожиданный запрос ' + url);
   };
@@ -268,7 +298,11 @@ t('«🧮 юнитка»: цена из Маркета, ставка буста 
   eq(s.rows[4].length, C.YOP_UNIT_HEAD.length, 'колонок');
   eq(U(s, 5, 'Кабинет'), 'Кабинет-А'); eq(U(s, 5, 'Артикул'), 'A'); eq(U(s, 5, 'Наименование'), 'Товар А');
   eq(U(s, 5, 'Цена в кабинете сейчас, ₽'), 1100); eq(U(s, 5, 'Ставка буста сейчас (последние заказы)'), 0.2, 'bidFee 2000 в заказе дня D = 20 %, а не 10 % из bids/info');
-  eq(U(s, 5, 'Остаток FBY (доступно), шт'), 40); eq(U(s, 5, 'Себес найден'), 'юнитка');
+  eq(U(s, 5, 'Остаток FBY (доступно), шт'), 50); eq(U(s, 5, 'Себес найден'), 'юнитка');
+  eq(U(s, 5, 'Остаток FBY Москва (Софьино), шт'), 40, 'v2.3.0: только Софьино, без возвратного и Екатеринбурга');
+  eq(U(s, 5, 'Минимум для акции, ₽'), 990); eq(U(s, 5, 'Акция: макс. цена для участия, ₽'), 1050);
+  eq(U(s, 5, 'Акция: участие'), 'участвует — добавил Маркет («Бестселлеры»)');
+  ok(String(U(s, 5, 'Маржа, ₽')).indexOf('-' + C.yopCol_(C.YOP_UNIT_HEAD.indexOf('Расходы дня (условно), ₽') + 1) + '5') > 0, 'расходы дня в марже');
   ok(/^=IF\(\w+5="",IF\(\w+5="",\w+5,\w+5\),\w+5\)$/.test(U(s, 5, 'Цена в сценарии, ₽')), U(s, 5, 'Цена в сценарии, ₽'));
   ok(String(U(s, 5, 'ЧП на штуку (сценарий), ₽')).indexOf('*25/100') > 0, 'налог 25 % в сценарии');
   eq(s.get(3, C.YOP_UNIT_HEAD.indexOf('Ваша цена, ₽') + 1).indexOf('Сценарий'), 0, 'надпись над блоком');
@@ -300,11 +334,41 @@ t('фильтр на листе: снимается перед записью, �
 t('сценарий: «Ваша цена» и «Ваша ставка» переживают прогон; формула сценария = расчёт модели', () => {
   const s = env.ss.getSheetByName(C.YOP_SH.unit);
   s.set(5, C.YOP_UNIT_HEAD.indexOf('Ваша цена, ₽') + 1, 1500); s.set(5, C.YOP_UNIT_HEAD.indexOf('Ваша ставка буста, %') + 1, 0.05);
+  s.set(5, C.YOP_UNIT_HEAD.indexOf('Группа товара (впишите)') + 1, 'инозитол');
   C.yopRecalcSheets();
   eq(U(s, 5, 'Ваша цена, ₽'), 1500); eq(U(s, 5, 'Ваша ставка буста, %'), 0.05);
+  eq(U(s, 5, 'Группа товара (впишите)'), 'инозитол', 'v2.3.0: группа переносится прогоном');
   const x = { coef: { выкуп: 0.9, тариф: 0.49, буст_k: 0.81, доставка: 0, перевод: 0, миля: 0, эквайринг: 0, возврат: 0, прочее: 0 },
     price: 1000, bid: 0.2, drr: 0, cogs: 100 };
   near(C.yopUnitCalc_(x, { price: 1500, bid: 0.05 }).ЧП, (1500 - 1500 * 0.49 - 1500 * 0.05 * 0.81 / 0.9 - 100) * 0.75, 'ЧП сценария');
+});
+
+t('v2.3.0: повторный 1️⃣ перечитывает последние дни начислений — удержания не удваиваются', () => {
+  const before = JSON.parse(env.folder.files['yop_cache_Кабинет-А.json']);
+  const net0 = env.net.length;
+  C.yopRunYesterday();
+  const after = JSON.parse(env.folder.files['yop_cache_Кабинет-А.json']);
+  const gens = b => env.net.slice(net0).filter(n => n[0].indexOf('generate') > 0 && n[1].businessId === b).map(n => n[1].dateFrom + '…' + n[1].dateTo);
+  // кабинет А засеян до v2.3.0 (записей svcRecent нет) — перечитывается только вчера; новый кабинет В — все 4 дня
+  eq(gens(11).join(','), D + '…' + D, 'А: дни без записи не перечитываются');
+  eq(gens(33).join(','), add(D, -3) + '…' + D, 'В: один отчёт на окно перечитки');
+  eq(JSON.stringify(after.svc), JSON.stringify(before.svc), 'удержания те же, не сложились второй раз');
+  eq(after.dayCost[D].показы, 3000, 'реклама за показы дня D — 3000, не 6000');
+  const v = JSON.parse(env.folder.files['yop_cache_Кабинет-В.json']);
+  ok(v.svcRecent[D] && v.svcRecent[add(D, -3)] && !v.svcRecent[add(D, -4)], 'помнятся ровно 4 последних дня');
+});
+
+t('v2.3.0: «по дням» — расходы дня последних дней дописываются из кэша, маржа и налог пересчитываются', () => {
+  const f = JSON.parse(env.folder.files['yop_cache_Кабинет-А.json']), X = add(D, -1);
+  f.dayCost[X] = { 'хранение': 77, 'прочее': 23 };
+  env.folder.files['yop_cache_Кабинет-А.json'] = JSON.stringify(f);
+  const s = env.ss.getSheetByName(C.YOP_SH.days), ru = X.split('-').reverse().join('.');
+  const r = s.rows.findIndex(x => x[0] === ru && x[1] === 'Кабинет-А') + 1, tot = s.rows.findIndex(x => x[0] === ru && x[1] === 'Все кабинеты') + 1;
+  s.set(r, 15, 1000); s.set(r, 5, 5000);
+  C.yopUpdateDayCosts_(s, C.yopForecastAll_(D), D);
+  eq(s.get(r, 17), 77, 'хранение'); eq(s.get(r, 19), 23, 'прочее'); eq(s.get(r, 20), 900, 'маржа = O − расходы дня');
+  near(s.get(r, 21), 225, 'налог 25 %'); near(s.get(r, 22), 675, 'ЧП');
+  ok(s.get(tot, 17) >= 77, 'итог дня пересчитан');
 });
 
 t('повторный прогон того же дня не дублирует блок; следующий день встаёт сверху', () => {

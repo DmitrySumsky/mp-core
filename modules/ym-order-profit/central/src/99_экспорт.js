@@ -11,6 +11,8 @@ if (typeof module !== 'undefined' && module.exports) {
     yopRunYesterday: yopRunYesterday, yopRefreshUnit: yopRefreshUnit, yopDailyTrigger: yopDailyTrigger, continueQueue: continueQueue,
     yopRecalcSheets: yopRecalcSheets, yopRebuildHistory: yopRebuildHistory, yopResetRun: yopResetRun,
     yopTriggerOn: yopTriggerOn, yopTriggerOff: yopTriggerOff,
+    yopUndoServiceDay_: yopUndoServiceDay_, yopSvcDaysToFetch_: yopSvcDaysToFetch_, yopCollectServices_: yopCollectServices_,
+    yopUpdateDayCosts_: yopUpdateDayCosts_, yopForecastAll_: yopForecastAll_, yopCol_: yopCol_,
     yopFx_: yopFx_, yopSepReset_: function () { YOP_SEP_ = null; },
     yopHelp: yopHelp, yopStatus: yopStatus, yopCheckConnection: yopCheckConnection, upgradeSheets: upgradeSheets
   };

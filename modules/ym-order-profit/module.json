@@ -1,7 +1,7 @@
 {
   "name": "ym-order-profit",
   "kind": "gas",
-  "version": "2.2.2",
+  "version": "2.3.0",
   "purpose": "ЧП по заказам Яндекс Маркета: прибыль вчерашних заказов прогнозом по истории своих заказов (выкуп по дозревшим когортам, факт удержаний из отчёта «Стоимость услуг»), факт рядом с прогнозом, юнитка на данных Маркета",
   "standard": "pult@1.0.0",
   "central": "central/build/central.js",
@@ -16,6 +16,7 @@
     "pull": "python modules/ym-order-profit/tools/pull.py --registry <реестр> --from <дата> --to <дата>",
     "seed_cache": "python modules/ym-order-profit/tools/seed_cache.py --registry <реестр> --out <папка>",
     "seed_book": "python modules/ym-order-profit/tools/seed_book.py --registry <реестр> [--cogs-xlsx <кабинет>=<файл>] [--add-cabinet <кабинет>] [--hide <лист>]",
+    "repair_svc": "python modules/ym-order-profit/tools/repair_svc.py --registry <реестр> [--only <кабинет>] [--dry-run]",
     "real_data": "node modules/ym-order-profit/tests/real_data.js <реестр> <день>"
   },
   "deviations": [

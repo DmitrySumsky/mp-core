@@ -219,11 +219,13 @@ function yopFactDay_(cache, flat, day, cogs) {
  * или с остатком на складах. Коэффициенты — те же, что у прогноза заказов дня `day` (факт удержаний
  * по дозревшим заказам); цена и ставка буста — факт заказов за 7 дней, нет заказов — цена в кабинете.
  * Реклама за показы делится условно: доля от суммы заказов кабинета за 30 дней.
+ * v2.3.0: так же условно — расходы дня (хранение, подписка, транзит, утилизация и прочее без номера заказа):
+ * их доля от суммы заказов кабинета за 30 дней, на выкупленную штуку — цена × доля ÷ выкуп.
  */
 function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
   var coef = yopCoefficients_(cache, flat, day, manual);
   var lo30 = yopAddDays_(day, -YOP.UNIT_DAYS + 1), lo7 = yopAddDays_(day, -YOP.UNIT_PRICE_DAYS + 1);
-  var acc = {}, gmv30 = 0, shows = 0;
+  var acc = {}, gmv30 = 0, shows = 0, dayOther = 0;
   flat.items.forEach(function (it) {
     if (it.day < lo30 || it.day > day) return;
     var a = acc[it.sku] || (acc[it.sku] = { n30: 0, n7: 0, gmv7: 0, bidgmv7: 0, lastDay: '', lastGmv: 0, lastBidGmv: 0,
@@ -238,10 +240,14 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
     if (it.day === a.lastDay) { a.lastGmv += it.price * it.n; a.lastBidGmv += it.price * it.n * it.bid; }
   });
   Object.keys(cache.dayCost).forEach(function (d) {
-    if (d >= lo30 && d <= day) shows += cache.dayCost[d]['показы'] || 0;
+    if (d < lo30 || d > day) return;
+    var dc = cache.dayCost[d];
+    shows += dc['показы'] || 0;
+    dayOther += (dc['хранение'] || 0) + (dc['подписка'] || 0) + (dc['прочее'] || 0);
   });
-  var drr = gmv30 ? shows / gmv30 : 0;
+  var drr = gmv30 ? shows / gmv30 : 0, drrDay = gmv30 ? dayOther / gmv30 : 0;
   var offers = (unitData && unitData.offers) || {}, st = (unitData && unitData.stocks) || { fby: {}, fbs: {} };
+  var minPromo = (unitData && unitData.minPromo) || null, promo = (unitData && unitData.promo) || null;
   var skus = {};
   Object.keys(acc).forEach(function (s) { skus[s] = 1; });
   Object.keys(st.fby || {}).concat(Object.keys(st.fbs || {})).forEach(function (s) { skus[s] = 1; });
@@ -259,13 +265,16 @@ function yopUnitRows_(cache, flat, day, cogs, manual, unitData) {
         .filter(String).join(', '),
       priceCab: o.price || null, price7: price7, price: price7 || o.price || 0, shop7: shop7, spp7: spp7,
       n30: a.n30, fby: (st.fby || {})[s] || 0, fbs: (st.fbs || {})[s] || 0,
-      bid: gW ? bW / gW : 0, drr: drr, factDays: w7 ? YOP.UNIT_PRICE_DAYS : (a.n30 ? YOP.UNIT_DAYS : null),
+      fbyMsk: st.fbyMsk ? st.fbyMsk[s] || 0 : null,                                     // v2.3.0: null — склады не получены
+      minPromo: minPromo && minPromo.hasOwnProperty(s) ? minPromo[s] : null,
+      promo: promo && promo[s] ? promo[s] : null,
+      bid: gW ? bW / gW : 0, drr: drr, drrDay: drrDay, factDays: w7 ? YOP.UNIT_PRICE_DAYS : (a.n30 ? YOP.UNIT_DAYS : null),
       bidNow: yopBidNow_(acc[s], lo7, unitData && unitData.bids, s),
       coef: p.c, src: p.src, cogs: yopCogsOf_(cogs, s)
     };
   });
   rows.sort(function (x, y) { return y.n30 - x.n30 || y.fby + y.fbs - x.fby - x.fbs; });
-  return { rows: rows, drr: drr, shows: shows, gmv30: gmv30 };
+  return { rows: rows, drr: drr, drrDay: drrDay, shows: shows, dayOther: dayOther, gmv30: gmv30 };
 }
 
 /**
@@ -293,6 +302,7 @@ function yopUnitCalc_(x, over) {
   };
   var mp = 0;
   Object.keys(m).forEach(function (k) { mp += m[k]; });
-  var before = P - mp - cg, shows = P * x.drr / b, margin = before - shows, tax = margin * YOP.TAX;
-  return { расходы: mp, доПоказов: before, показы: shows, маржа: margin, налог: tax, ЧП: margin - tax };
+  var before = P - mp - cg, shows = P * x.drr / b, dayc = P * (x.drrDay || 0) / b;         // v2.3.0: расходы дня условно
+  var margin = before - shows - dayc, tax = margin * YOP.TAX;
+  return { расходы: mp, доПоказов: before, показы: shows, расходыДня: dayc, маржа: margin, налог: tax, ЧП: margin - tax };
 }

@@ -153,7 +153,7 @@ function yopCacheFolder_() {
 function yopCacheName_(cab) { return 'yop_cache_' + cab.replace(/\s+/g, '') + '.json'; }
 function yopUnitDataName_(cab) { return 'yop_unit_' + cab.replace(/\s+/g, '') + '.json'; }
 
-function yopEmptyCache_() { return { orders: {}, svc: {}, tariffs: {}, dayCost: {}, svcDays: [] }; }
+function yopEmptyCache_() { return { orders: {}, svc: {}, tariffs: {}, dayCost: {}, svcDays: [], svcRecent: {} }; }
 
 function yopJsonLoad_(fileName) {
   var it = yopCacheFolder_().getFilesByName(fileName);
@@ -173,6 +173,7 @@ function yopCacheLoad_(cab) {
   c.tariffs = c.tariffs || {};
   c.svc = c.svc || {};
   c.orders = c.orders || {};
+  c.svcRecent = c.svcRecent || {};                 // v2.3.0: что добавил в кэш каждый из последних дней начислений
   return c;
 }
 
@@ -188,6 +189,8 @@ function yopCachePrune_(cache, upto) {
   Object.keys(cache.tariffs).forEach(function (key) { if (key.slice(0, 10) < lo) delete cache.tariffs[key]; });
   Object.keys(cache.dayCost).forEach(function (d) { if (d < lo) delete cache.dayCost[d]; });
   cache.svcDays = cache.svcDays.filter(function (d) { return d >= lo; });
+  var fresh = yopAddDays_(upto, -YOP_SVC_RECHECK + 1);          // v2.3.0: старше окна перечитки начисления уже не меняются
+  Object.keys(cache.svcRecent || {}).forEach(function (d) { if (d < fresh) delete cache.svcRecent[d]; });
 }
 /** v2.0.0. Состояние кабинета для «📊 Что сейчас происходит» (без чтения многомегабайтного кэша). */
 function yopCabState_(name, patch) {
