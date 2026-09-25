@@ -9,6 +9,10 @@
 
     python tools/build.py           # собрать
     python tools/build.py --check   # только проверить свежесть (для CI)
+
+Уточнение (25.09.2026): shell=True только на Windows (там он нужен, чтобы нашёлся node.cmd).
+На macOS/Linux shell=True со списком аргументов запускал голый `node`: REPL ждал ввод, а
+синтаксис не проверялся. Правка в коде уехала вместе с v2.4.0, здесь — запись о ней.
 """
 import io
 import os

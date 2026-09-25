@@ -9,6 +9,10 @@
 
     python tools/build.py           # собрать
     python tools/build.py --check   # только проверить свежесть (для CI)
+
+Уточнение (25.09.2026): shell=True только на Windows (там он нужен, чтобы нашёлся node.cmd).
+На macOS/Linux shell=True со списком аргументов запускал голый `node`, а `--check` и файл
+уходили в $0 — проверка синтаксиса молча «проходила» на любом коде.
 """
 import io
 import os
@@ -73,8 +77,8 @@ def check(text):
     bad = []
     tmp = os.path.join(tempfile.gettempdir(), "pos_central_check.js")
     io.open(tmp, "w", encoding="utf-8", newline="\n").write(text)
-    r = subprocess.run(["node", "--check", tmp], capture_output=True, text=True, shell=True,
-                       encoding="utf-8", errors="replace")
+    r = subprocess.run(["node", "--check", tmp], capture_output=True, text=True, shell=(os.name == "nt"),
+                       encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     if r.returncode != 0:
         bad.append("node --check: " + ((r.stderr or r.stdout).strip().splitlines() or ["?"])[0])
     os.remove(tmp)

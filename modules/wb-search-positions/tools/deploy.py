@@ -14,6 +14,10 @@
 
 Перед пушем проверяется, нет ли в скрипте книги ВТОРОГО onOpen: два определения одного
 имени в проекте молча затирают друг друга, и меню исчезает без ошибки.
+
+Уточнение (25.09.2026): shell=True только на Windows (там он нужен, чтобы нашёлся clasp.cmd).
+На macOS/Linux shell=True со списком аргументов запускал голый `clasp`/`node` без аргументов;
+сборка вызывается через sys.executable — на Mac нет команды `python`.
 """
 import io
 import json
@@ -34,7 +38,7 @@ MANIFEST = os.path.join(HERE, "loader", "appsscript.json")
 
 
 def sh(args, cwd=None):
-    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, shell=True,
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, shell=(os.name == "nt"),
                           encoding="utf-8", errors="replace")
 
 
@@ -92,7 +96,7 @@ def main():
         for b in books():
             print("%-20s %s" % (b["key"], b.get("title", "")))
         return 0
-    if sh(["python", os.path.join(HERE, "tools", "build.py")]).returncode != 0:
+    if sh([sys.executable, os.path.join(HERE, "tools", "build.py")]).returncode != 0:
         print("сборка не прошла проверки — деплой отменён")
         return 1
     t = sh(["node", os.path.join(HERE, "tests", "run.js")])
