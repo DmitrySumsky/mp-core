@@ -13,6 +13,7 @@ if (typeof module !== 'undefined' && module.exports) {
     yopTriggerOn: yopTriggerOn, yopTriggerOff: yopTriggerOff,
     yopUndoServiceDay_: yopUndoServiceDay_, yopSvcDaysToFetch_: yopSvcDaysToFetch_, yopCollectServices_: yopCollectServices_,
     yopUpdateDayCosts_: yopUpdateDayCosts_, yopForecastAll_: yopForecastAll_, yopCol_: yopCol_,
+    yopUnitNotes_: yopUnitNotes_, yopNamed_: yopNamed_, YOP_DETAIL_NOTES: YOP_DETAIL_NOTES, YOP_DAYS_NOTES: YOP_DAYS_NOTES,
     yopFx_: yopFx_, yopSepReset_: function () { YOP_SEP_ = null; },
     yopHelp: yopHelp, yopStatus: yopStatus, yopCheckConnection: yopCheckConnection, upgradeSheets: upgradeSheets
   };

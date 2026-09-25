@@ -28,6 +28,7 @@ FakeSheet.prototype.getLastColumn = function () {
   return Math.max.apply(null, [0].concat(this.rows.map(function (r) { var n = r.length; while (n && (r[n - 1] === undefined || r[n - 1] === '')) n--; return n; })));
 };
 FakeSheet.prototype.getMaxRows = function () { return Math.max(this.maxRows, this.rows.length); };
+FakeSheet.prototype.getName = function () { return this.name; };
 FakeSheet.prototype.clear = function () { this.rows = []; this.formats = {}; return this; };
 FakeSheet.prototype.insertRowsBefore = function (r, n) {
   while (this.rows.length < r - 1) this.rows.push([]);
@@ -52,6 +53,11 @@ FakeRange.prototype.setValues = function (v) {
       this.sh.set(this.r + i, this.c + j, v[i][j]);
     }
   }
+  return this;
+};
+FakeRange.prototype.setNotes = function (v) {
+  this.sh.notes = this.sh.notes || {};
+  for (var i = 0; i < v.length; i++) for (var j = 0; j < v[i].length; j++) this.sh.notes[(this.r + i) + ':' + (this.c + j)] = v[i][j];
   return this;
 };
 FakeRange.prototype.setValue = function (x) { this.sh.set(this.r, this.c, x); return this; };

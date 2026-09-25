@@ -73,8 +73,10 @@ def check(text):
     bad = []
     tmp = os.path.join(tempfile.gettempdir(), "yop_central_check.js")
     io.open(tmp, "w", encoding="utf-8", newline="\n").write(text)
-    r = subprocess.run(["node", "--check", tmp], capture_output=True, text=True, shell=True,
-                       encoding="utf-8", errors="replace")
+    # 25.09.2026: shell=True только на Windows — на Mac со списком аргументов он запускал голый `node` (REPL ждал ввод,
+    # сборка висла, а синтаксис не проверялся)
+    r = subprocess.run(["node", "--check", tmp], capture_output=True, text=True, shell=(os.name == "nt"),
+                       encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     if r.returncode != 0:
         bad.append("node --check: " + ((r.stderr or r.stdout).strip().splitlines() or ["?"])[0])
     os.remove(tmp)

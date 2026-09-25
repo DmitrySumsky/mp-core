@@ -308,6 +308,19 @@ t('«🧮 юнитка»: цена из Маркета, ставка буста 
   eq(s.get(3, C.YOP_UNIT_HEAD.indexOf('Ваша цена, ₽') + 1).indexOf('Сценарий'), 0, 'надпись над блоком');
 });
 
+t('v2.4.0: примечания к заголовкам — у каждой колонки трёх листов, буквы в формулах по раскладке', () => {
+  const un = C.yopUnitNotes_(), col = h => C.yopCol_(C.YOP_UNIT_HEAD.indexOf(h) + 1);
+  eq(un.length, C.YOP_UNIT_HEAD.length); eq(C.YOP_DETAIL_NOTES.length, C.YOP_DETAIL_HEAD.length); eq(C.YOP_DAYS_NOTES.length, C.YOP_DAYS_HEAD.length);
+  un.forEach((n, i) => { ok(n, 'пустое примечание: ' + C.YOP_UNIT_HEAD[i]); ok(n.indexOf('?') < 0 || /\?[^A-Z]/.test(n) === false || n.indexOf(' ? ') < 0, n); });
+  ok(un.every(n => !/(^|[^A-Za-zА-я])\?([^A-Za-zА-я]|$)/.test(n)), 'все ключи колонок нашлись');
+  const fp = un[C.YOP_UNIT_HEAD.indexOf('ЧП на штуку, ₽')];
+  ok(fp.indexOf(col('Маржа, ₽') + ' − ' + col('Налог 25% (как в юнитке), ₽')) > 0, fp);
+  const s = env.ss.getSheetByName(C.YOP_SH.unit), d = env.ss.getSheetByName(C.YOP_SH.days), o = env.ss.getSheetByName(C.YOP_SH.detail);
+  ok(s.notes && /Формула/.test(s.notes['4:' + (C.YOP_UNIT_HEAD.indexOf('Маржа, ₽') + 1)]), 'на листе юнитки');
+  ok(d.notes && d.notes['4:21'].indexOf('T «Маржа до налога» × 25 %') > 0, d.notes['4:21']);
+  ok(o.notes && o.notes['4:27'].indexOf('Q «Выручка» − сумма R:Z') > 0, o.notes['4:27']);
+});
+
 t('ставка буста сейчас: последний день заказов, иначе bids/info, иначе пусто', () => {
   const lo7 = add(D, -6);
   near(C.yopBidNow_({ lastDay: D, lastGmv: 3000, lastBidGmv: 3000 * 0.12 }, lo7, { A: 0.3 }, 'A'), 0.12, 'заказы важнее bids/info');
