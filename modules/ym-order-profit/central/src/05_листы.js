@@ -272,7 +272,8 @@ var YOP_UNIT_SPEC = [
   ['priceNow', 'Цена в кабинете сейчас, ₽', 'Карточка и остатки', 'rub', '', function (x) { return x.priceCab || ''; }],
   // v2.3.0: акции — минимум для акции (цена, ниже которой товар не идёт в акции) и участие в акциях Маркета
   ['minPromo', 'Минимум для акции, ₽', '', 'rub', '', function (x) { return x.minPromo == null ? '' : x.minPromo; }],
-  ['promoMax', 'Акция: макс. цена для участия, ₽', '', 'rub', '', function (x) { return x.promo && x.promo.max != null ? x.promo.max : ''; }],
+  ['promoPrice', 'Цена в акции, ₽', '', 'rub', '', function (x) { return x.promo && x.promo.price != null ? x.promo.price : ''; }],
+  ['promoMax', 'Макс. акц. цена, ₽', '', 'rub', '', function (x) { return x.promo && x.promo.max != null ? x.promo.max : ''; }],
   ['promoStatus', 'Акция: участие', '', '', '', function (x) { return x.promo ? x.promo.status + ' («' + x.promo.promo + '»)' : ''; }],
   ['price7', 'Цена продажи ср. за 7 дн (нет заказов — за 30), ₽', '', 'rub', '', function (x) { return x.price7 == null ? '' : Math.round(x.price7); }],
   ['bidNow', 'Ставка буста сейчас (последние заказы)', '', 'pct', '', function (x) { return x.bidNow == null ? '' : x.bidNow; }],

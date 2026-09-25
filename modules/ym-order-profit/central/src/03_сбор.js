@@ -363,7 +363,8 @@ var YOP_PROMO_STATUS = {
 /**
  * v2.3.0. Участие в акциях Маркета по артикулам: POST promos (список акций кабинета) → promos/offers каждой.
  * На артикул — одна запись: акция, где он участвует, иначе первая, куда его можно добавить.
- * { артикул: { promo: название, status: текст, max: макс. цена для участия, in: участвует ли } }.
+ * { артикул: { promo: название, status: текст, price: цена в акции (promoPrice), max: макс. акц. цена (maxPromoPrice), in: участвует ли } }.
+ * Цену в акции Маркет отдаёт только у товаров, добавленных продавцом; у добавленных Маркетом её в ответе нет.
  */
 function yopPromos_(k) {
   var out = {};
@@ -378,7 +379,7 @@ function yopPromos_(k) {
         if (out[sku] && (out[sku].in || !isIn)) return;
         var dp = (o.params || {}).discountParams || {};
         out[sku] = { promo: p.name || p.id, status: YOP_PROMO_STATUS[st] || st, in: isIn,
-          max: dp.maxPromoPrice != null ? Number(dp.maxPromoPrice) : (dp.promoPrice != null ? Number(dp.promoPrice) : null) };
+          price: dp.promoPrice != null ? Number(dp.promoPrice) : null, max: dp.maxPromoPrice != null ? Number(dp.maxPromoPrice) : null };
       });
       token = (res.paging || {}).nextPageToken;
     } while (token && (res.offers || []).length);
